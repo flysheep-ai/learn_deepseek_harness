@@ -125,6 +125,8 @@ deepseek-harness 真正**独一无二**的地方，是这条链的最后一步�
                          失败先恢复再记录
  s22 session_lifecycle   session/end-seed 种子边界、fork、
                          goal activation（armed/disarmed）、派生缓存
+ s23 self_extending      inspect / mount / unmount —— 模型在会话中
+                         亲手改装自己的运行时
 ```
 
 每章都回答一个具体问题：
@@ -136,8 +138,9 @@ deepseek-harness 真正**独一无二**的地方，是这条链的最后一步�
 - **后半部分**：为什么工业 Harness 要 Event / Plugin / Capability？
   怎么让"换一个沙箱"不意味着"改六个工具"？
   怎么让多个 Agent 协作而不替模型写工作流？
-- **进阶篇（s19–s22）**：deepseek-harness 与其他项目**不同**的内容——
-  可逆效应、反应式依赖、惯性生命周期、会话种子边界。
+- **进阶篇（s19–s23）**：deepseek-harness 与其他项目**不同**的内容——
+  可逆效应、反应式依赖、惯性生命周期、会话种子边界、
+  以及**自我扩展**（模型改装自己的运行时）。
   Cordis 论文把这些形式化了；这里把它们做成可运行的章节。
 
 ---

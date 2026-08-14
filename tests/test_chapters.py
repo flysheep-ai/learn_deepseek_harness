@@ -20,6 +20,7 @@ CHAPTERS = [
     "s17_goal_loop", "s18_full_harness",
     "s19_revertible_effects", "s20_reactive_coeffects",
     "s21_inertial_lifecycle", "s22_session_lifecycle",
+    "s23_self_extending",
 ]
 
 

@@ -328,6 +328,7 @@ s16（Agent Team）和 s17（Goal Loop）是这条禁令最容易被违反的地
   s20 reactive_coeffects  依赖运行时重判 + 级联卸载三段（停供→守卫→撤逆）
   s21 inertial_lifecycle  target vs committed 驱动 + 惯性 + 失败先恢复再记录
   s22 session_lifecycle   end-seed 种子边界 / fork / activation / 派生缓存
+  s23 self_extending       inspect / mount / unmount —— 模型改装自己的运行时
 ```
 
 每章相对上一章的**新增触发点**（即"上一章为什么不够用"）：

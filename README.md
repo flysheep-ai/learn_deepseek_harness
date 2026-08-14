@@ -132,6 +132,8 @@ Part 4 (advanced): What makes deepseek-harness different from other projects
                          failure recovers first, records second
  s22 session_lifecycle   session/end-seed boundary, fork, goal activation
                          (armed/disarmed), derived caches
+ s23 self_extending      inspect / mount / unmount — the model modifies
+                         its own runtime mid-session
 ```
 
 Each chapter answers one concrete question:
@@ -144,8 +146,9 @@ Each chapter answers one concrete question:
   How can "switch to a sandbox" not mean "rewrite six tools"?
   How do multiple agents cooperate without the harness scripting their workflow?
 - **Part 4**: What makes deepseek-harness *different*: revertible effects,
-  reactive coeffects, inertial lifecycles, and session seed boundaries —
-  formalized in the Cordis paper, taught here in runnable form.
+  reactive coeffects, inertial lifecycles, session seed boundaries, and
+  **self-extension** (the model modifies its own runtime) — formalized in the
+  Cordis paper and dsh's agent notes, taught here in runnable form.
 
 ---
 
@@ -202,7 +205,8 @@ learn-agent-harness/
 ├── s19_revertible_effects/ code.py + README.md（中文）+ README.en.md
 ├── s20_reactive_coeffects/ code.py + README.md（中文）+ README.en.md
 ├── s21_inertial_lifecycle/ code.py + README.md（中文）+ README.en.md
-└── s22_session_lifecycle/  code.py + README.md（中文）+ README.en.md
+├── s22_session_lifecycle/  code.py + README.md（中文）+ README.en.md
+└── s23_self_extending/     code.py + README.md（中文）+ README.en.md
 ```
 
 **Why one `code.py` per chapter instead of a shared `src/`?**
