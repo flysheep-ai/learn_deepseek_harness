@@ -1,0 +1,811 @@
+#!/usr/bin/env python3
+"""s06 — Turn and Step
+
+    Turn（一次输入的排空）
+     ├── Step 1   模型请求 + 它引发的工具执行
+     ├── Step 2   模型请求 + 它引发的工具执行
+     └── Step 3   模型请求（不要工具了）
+    Turn End      reason = natural-stop
+
+这一章回答：**一次用户输入，等于一次模型调用吗？**
+
+不等于。而且这个区别一旦不显式表达出来，预算、中断、
+"这一轮结束时做点什么"这三类需求全都无处安放。
+
+顺便，这一章开始提供 `--debug`：Harness 是抽象系统，看不见就学不会。
+
+运行：
+    python s06_turn_and_step/code.py --demo
+    python s06_turn_and_step/code.py --demo --debug
+    python s06_turn_and_step/code.py --debug
+"""
+
+import glob as globlib
+import json
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from collections import deque
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from harness_llm import LLMError, get_provider, scripted  # noqa: E402
+
+MAX_STEPS_PER_TURN = 12
+
+
+# ══════════════════════════════════════════════════════════════════
+# 沿用 s05（未改动）：SessionEvent / Session
+# ══════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class SessionEvent:
+    seq: int
+    type: str
+    data: dict[str, Any]
+    time: float = field(default_factory=time.time)
+
+    def to_json(self) -> str:
+        return json.dumps({"seq": self.seq, "type": self.type, "time": self.time, "data": self.data},
+                          ensure_ascii=False)
+
+    @staticmethod
+    def from_json(line: str) -> "SessionEvent":
+        d = json.loads(line)
+        return SessionEvent(d["seq"], d["type"], d["data"], d.get("time", 0.0))
+
+
+EV_SESSION_START = "session/start"
+EV_USER_MESSAGE = "user/message"
+EV_ASSISTANT_MESSAGE = "assistant/message"
+EV_TOOL_CALL = "tool/call"
+EV_TOOL_RESULT = "tool/result"
+EV_PERMISSION = "permission/decision"
+EV_USAGE = "request/usage"
+
+# ── s06 新增的四个事件 ────────────────────────────────────────────
+#
+# 它们全是 log-only：turn / step 的边界是 Harness 的结构，
+# 不是给模型看的内容。模型只关心消息序列，不关心它被怎么分组。
+EV_TURN_START = "turn/start"
+EV_TURN_END = "turn/end"
+EV_STEP_START = "step/start"
+EV_STEP_END = "step/end"
+
+SURFACE_EVENTS = {EV_USER_MESSAGE, EV_ASSISTANT_MESSAGE, EV_TOOL_RESULT}
+
+
+class Session:
+    def __init__(self, session_id: str | None = None, path: Path | None = None) -> None:
+        self.id = session_id or f"ses_{uuid.uuid4().hex[:10]}"
+        self.path = path
+        self._events: list[SessionEvent] = []
+        self._seq = 0
+
+    def append(self, type_: str, data: dict[str, Any]) -> SessionEvent:
+        json.dumps(data, ensure_ascii=False)
+        self._seq += 1
+        ev = SessionEvent(self._seq, type_, data)
+        self._events.append(ev)
+        if self.path:
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(ev.to_json() + "\n")
+        return ev
+
+    def events(self, upto: int | None = None) -> list[SessionEvent]:
+        return [e for e in self._events if upto is None or e.seq <= upto]
+
+    def __len__(self) -> int:
+        return len(self._events)
+
+    def last_turn(self) -> int:
+        """从日志里读出当前轮次 —— 而不是在内存里维护一个计数器。
+
+        这不是洁癖。计数器是**第二份真相**：恢复会话时它归零，
+        于是新事件的 turn 号会和历史撞车，日志就废了。
+        turn 号必须和其他事实一样，从日志推导。
+        """
+        return max((e.data["turn"] for e in self._events if e.type == EV_TURN_START), default=0)
+
+    @classmethod
+    def load(cls, path: Path) -> "Session":
+        s = cls(session_id=path.stem, path=path)
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                ev = SessionEvent.from_json(line)
+                s._events.append(ev)
+                s._seq = max(s._seq, ev.seq)
+        return s
+
+
+def derive_messages(session: Session, upto: int | None = None) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    for ev in session.events(upto):
+        if ev.type not in SURFACE_EVENTS:
+            continue
+        if ev.type == EV_USER_MESSAGE:
+            messages.append({"role": "user", "content": ev.data["content"]})
+        elif ev.type == EV_ASSISTANT_MESSAGE:
+            msg: dict[str, Any] = {"role": "assistant", "content": ev.data.get("text", "")}
+            if ev.data.get("tool_calls"):
+                msg["tool_calls"] = ev.data["tool_calls"]
+            messages.append(msg)
+        elif ev.type == EV_TOOL_RESULT:
+            messages.append({"role": "tool", "tool_call_id": ev.data["call_id"], "content": ev.data["content"]})
+    return messages
+
+
+# ══════════════════════════════════════════════════════════════════
+# s06 新增：Inbox —— 输入不是"直接进上下文"，是先排队
+# ══════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class InboxItem:
+    content: str
+    source: str = "user"   # user | injected | steering
+
+
+class Inbox:
+    """待认领的输入队列。
+
+    s05 之前，用户输入是**立刻**变成 user/message 的。
+    这在单轮问答里没问题，一旦 turn 可能跨越多个 step，问题就来了：
+
+        用户在模型跑到第 3 步时插了一句"等等，先看看 config.py"。
+        这句话属于当前这一轮，还是下一轮？
+
+    答案是：它进 inbox 排队，由**下一个 step 认领**（claim）。
+    也就是说它属于当前 turn，会立刻影响模型的下一次请求，
+    而不是等这一轮全部结束。
+
+    这也解释了 turn 的准确定义：
+
+        turn = 一次输入的**排空**（drain）
+        只要 inbox 里还欠着东西，或者工具还欠模型一次请求，这一轮就没结束。
+
+    真实 Harness 里 inbox 还承载注入的上下文（文件变更通知、
+    子目录规范、定时任务提醒），来源不同但都走同一条认领路径。
+    我们这里保留了 source 字段，s08/s09/s12 会用到。
+    """
+
+    def __init__(self) -> None:
+        self._q: deque[InboxItem] = deque()
+
+    def put(self, content: str, source: str = "user") -> None:
+        self._q.append(InboxItem(content, source))
+
+    def claim(self) -> list[InboxItem]:
+        """认领当前排队的所有输入。认领即出队 —— 不会被认领两次。"""
+        items = list(self._q)
+        self._q.clear()
+        return items
+
+    def __bool__(self) -> bool:
+        return bool(self._q)
+
+
+# ══════════════════════════════════════════════════════════════════
+# s06 新增：Tracer —— 把 Harness 内部正在发生的事情显示出来
+# ══════════════════════════════════════════════════════════════════
+
+
+class Tracer:
+    """Harness 是抽象系统，看不见就学不会。
+
+    刻意做成一个**独立对象**而不是散落的 print：
+    s13 会把它整个换成一个事件监听器，那时 loop 里的 tracer 调用会消失。
+    先让它有形状，才好在后面把它拆走。
+    """
+
+    def __init__(self, enabled: bool = False) -> None:
+        self.enabled = enabled
+
+    def turn_start(self, turn: int) -> None:
+        if self.enabled:
+            print(f"\033[1;34m[turn {turn} start]\033[0m")
+
+    def turn_end(self, turn: int, reason: str, steps: int) -> None:
+        if self.enabled:
+            print(f"\033[1;34m[turn {turn} end]\033[0m reason={reason} steps={steps}\n")
+
+    def step_start(self, turn: int, step: int, claimed: list[InboxItem]) -> None:
+        if self.enabled:
+            print(f"  \033[34m[step {step}]\033[0m", end="")
+            print(f"  claimed={len(claimed)}" + (f" ({claimed[0].source})" if claimed else ""))
+
+    def request(self, messages: list, tools: list, system: str) -> None:
+        if self.enabled:
+            print(f"    \033[90m→ model request   messages={len(messages)} tools={len(tools)} "
+                  f"system={len(system)}chars\033[0m")
+
+    def reply(self, reply) -> None:
+        if self.enabled:
+            names = ",".join(c.name for c in reply.tool_calls) or "-"
+            print(f"    \033[90m← model reply     text={len(reply.text)}chars "
+                  f"tool_calls={len(reply.tool_calls)} [{names}] "
+                  f"usage={reply.usage.get('input', 0)}/{reply.usage.get('output', 0)}\033[0m")
+
+    def tool_pre(self, name: str, args: dict, verdict: str) -> None:
+        if self.enabled:
+            print(f"    \033[90m· tool pre        {name} {_brief(args)[:60]} → {verdict}\033[0m")
+
+    def tool_result(self, name: str, result: "ToolResult") -> None:
+        if self.enabled:
+            state = "error" if result.is_error else "ok"
+            print(f"    \033[90m· tool result     {name} {state} {len(result.content)}B\033[0m")
+
+    def step_end(self, turn: int, step: int) -> None:
+        if self.enabled:
+            print(f"  \033[34m[step {step} end]\033[0m")
+
+
+# ══════════════════════════════════════════════════════════════════
+# 沿用 s03–s05（未改动）：Tool / ToolResult / ToolRegistry / 权限
+# ══════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    content: str
+    is_error: bool = False
+
+
+@dataclass(frozen=True)
+class Tool:
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    handler: Callable[..., str]
+
+    @property
+    def required(self) -> list[str]:
+        return list(self.parameters.get("required", []))
+
+    def schema(self) -> dict[str, Any]:
+        return {"name": self.name, "description": self.description, "parameters": self.parameters}
+
+
+class ToolRegistry:
+    def __init__(self) -> None:
+        self._tools: dict[str, Tool] = {}
+
+    def register(self, tool: Tool) -> None:
+        if tool.name in self._tools:
+            raise ValueError(f"工具重名：{tool.name}")
+        self._tools[tool.name] = tool
+
+    def tool(self, name: str, description: str, parameters: dict[str, Any]) -> Callable:
+        def deco(fn):
+            self.register(Tool(name, description, parameters, fn))
+            return fn
+        return deco
+
+    def get(self, name: str) -> Tool | None:
+        return self._tools.get(name)
+
+    def names(self) -> list[str]:
+        return list(self._tools)
+
+    def schemas(self) -> list[dict[str, Any]]:
+        return [t.schema() for t in self._tools.values()]
+
+
+class Decision(str, Enum):
+    ALLOW = "allow"
+    ASK = "ask"
+    DENY = "deny"
+
+
+@dataclass(frozen=True)
+class Verdict:
+    decision: Decision
+    reason: str = ""
+
+
+DENY_PATTERNS = [
+    (r"\brm\s+(-\w+\s+)*-\w*[rf]\w*\s+(/|~|\$HOME)(\s|$)", "递归删除根目录或家目录"),
+    (r":\(\)\s*\{.*\}\s*;\s*:", "fork 炸弹"),
+    (r"\bmkfs(\.\w+)?\b", "格式化文件系统"),
+    (r"\bshutdown\b|\breboot\b|\bhalt\b", "关机/重启"),
+    (r"curl[^|]*\|\s*(sudo\s+)?(ba)?sh", "把远程脚本直接管进 shell"),
+]
+SAFE_BASH = re.compile(
+    r"^\s*(ls|pwd|cat|head|tail|wc|file|stat|find|grep|rg|which|echo|date|"
+    r"git\s+(status|log|diff|show|branch)|pytest|python3?\s+-m\s+pytest|"
+    r"python3?\s+--version|uname|env|df|du)\b"
+)
+
+
+class PermissionPolicy:
+    def __init__(self, yolo: bool = False) -> None:
+        self.yolo = yolo
+
+    def check(self, name: str, args: dict[str, Any]) -> Verdict:
+        if self.yolo:
+            return Verdict(Decision.ALLOW, "yolo 模式")
+        if name in ("read", "glob", "grep"):
+            return Verdict(Decision.ALLOW, "只读操作")
+        if name in ("write", "edit"):
+            return Verdict(Decision.ASK, f"将修改文件 {args.get('path', '?')}")
+        if name == "bash":
+            cmd = str(args.get("command", ""))
+            for pattern, why in DENY_PATTERNS:
+                if re.search(pattern, cmd):
+                    return Verdict(Decision.DENY, why)
+            if SAFE_BASH.match(cmd):
+                return Verdict(Decision.ALLOW, "只读命令")
+            return Verdict(Decision.ASK, "将执行 shell 命令")
+        return Verdict(Decision.ASK, "未定义规则的工具")
+
+
+Approver = Callable[[str, dict[str, Any], str], bool]
+
+
+def cli_approver(name: str, args: dict[str, Any], reason: str) -> bool:
+    print(f"\n  \033[35m[需要批准]\033[0m {name} — {reason}")
+    for k, v in args.items():
+        print(f"    {k} = {str(v)[:300]}")
+    try:
+        return input("  批准执行？[y/N] ").strip().lower() in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+
+# ══════════════════════════════════════════════════════════════════
+# 沿用 s05（仅加入 tracer 回调）：ToolExecutor
+# ══════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class ToolCallCtx:
+    call_id: str
+    name: str
+    arguments: dict[str, Any]
+    turn: int
+    step: int
+    verdict: Verdict | None = None
+
+
+class ToolExecutor:
+    def __init__(self, registry: ToolRegistry, policy: PermissionPolicy,
+                 approver: Approver, tracer: Tracer) -> None:
+        self.registry = registry
+        self.policy = policy
+        self.approver = approver
+        self.tracer = tracer
+
+    def pre_execute(self, ctx: ToolCallCtx, session: Session) -> ToolResult | None:
+        tool = self.registry.get(ctx.name)
+        if tool is None:
+            self.tracer.tool_pre(ctx.name, ctx.arguments, "unknown-tool")
+            return ToolResult(f"错误：没有名为 '{ctx.name}' 的工具。可用工具：{', '.join(self.registry.names())}",
+                              is_error=True)
+        missing = [k for k in tool.required if k not in ctx.arguments]
+        if missing:
+            self.tracer.tool_pre(ctx.name, ctx.arguments, "missing-args")
+            return ToolResult(f"错误：{ctx.name} 缺少必填参数：{', '.join(missing)}", is_error=True)
+
+        ctx.verdict = self.policy.check(ctx.name, ctx.arguments)
+        approved: bool | None = None
+        if ctx.verdict.decision is Decision.ASK:
+            approved = self.approver(ctx.name, ctx.arguments, ctx.verdict.reason)
+
+        self.tracer.tool_pre(ctx.name, ctx.arguments,
+                             ctx.verdict.decision.value + ("" if approved is None else f"→{'y' if approved else 'n'}"))
+        session.append(EV_PERMISSION, {
+            "turn": ctx.turn, "step": ctx.step, "call_id": ctx.call_id, "tool": ctx.name,
+            "decision": ctx.verdict.decision.value, "reason": ctx.verdict.reason, "approved": approved,
+        })
+
+        if ctx.verdict.decision is Decision.DENY:
+            return ToolResult(f"权限拒绝：{ctx.verdict.reason}。这个操作在本环境中被禁止，请换一种方式。",
+                              is_error=True)
+        if approved is False:
+            return ToolResult("用户拒绝了这次操作。请换一种方式，或者先说明你为什么需要它。", is_error=True)
+        return None
+
+    def run_body(self, ctx: ToolCallCtx) -> ToolResult:
+        tool = self.registry.get(ctx.name)
+        assert tool is not None
+        known = set(tool.parameters.get("properties", {}))
+        cleaned = {k: v for k, v in ctx.arguments.items() if k in known}
+        try:
+            return ToolResult(tool.handler(**cleaned))
+        except Exception as e:  # noqa: BLE001
+            return ToolResult(f"错误：{type(e).__name__}: {e}", is_error=True)
+
+    def post_execute(self, ctx: ToolCallCtx, result: ToolResult) -> ToolResult:
+        if len(result.content) > 20000:
+            head, tail = result.content[:12000], result.content[-4000:]
+            result = ToolResult(f"{head}\n\n…（省略 {len(result.content) - 16000} 字符）…\n\n{tail}",
+                                result.is_error)
+        self.tracer.tool_result(ctx.name, result)
+        return result
+
+    def execute(self, call_id: str, name: str, arguments: dict[str, Any],
+                session: Session, turn: int, step: int) -> ToolResult:
+        ctx = ToolCallCtx(call_id, name, arguments, turn, step)
+        # 所有 tool 事件现在都带 turn/step 坐标 —— 日志从"平的"变成"有层次的"
+        session.append(EV_TOOL_CALL, {"turn": turn, "step": step, "call_id": call_id,
+                                      "name": name, "arguments": arguments})
+        short = self.pre_execute(ctx, session)
+        result = short if short is not None else self.run_body(ctx)
+        result = self.post_execute(ctx, result)
+        session.append(EV_TOOL_RESULT, {"turn": turn, "step": step, "call_id": call_id,
+                                        "name": name, "content": result.content, "is_error": result.is_error})
+        return result
+
+
+# ══════════════════════════════════════════════════════════════════
+# 沿用 s03–s05（未改动）：六个工具
+# ══════════════════════════════════════════════════════════════════
+
+registry = ToolRegistry()
+WORKSPACE = Path.cwd()
+
+
+def safe_path(p: str) -> Path:
+    root = WORKSPACE.resolve()
+    path = (root / p).resolve()
+    if path != root and root not in path.parents:
+        raise ValueError(f"路径越界，超出工作区：{p}")
+    return path
+
+
+@registry.tool("bash", "在工作目录下执行一条 shell 命令。",
+               {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]})
+def run_bash(command: str) -> str:
+    try:
+        r = subprocess.run(command, shell=True, cwd=WORKSPACE, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=60)
+        out = (r.stdout + r.stderr).strip()
+        if r.returncode != 0:
+            out = f"[exit {r.returncode}]\n{out}"
+        return out[:20000] if out else "(无输出)"
+    except subprocess.TimeoutExpired:
+        return "错误：命令超时（60 秒）"
+
+
+@registry.tool("read", "读取文件内容，返回带行号的文本。",
+               {"type": "object", "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}},
+                "required": ["path"]})
+def run_read(path: str, limit: int | None = None) -> str:
+    lines = safe_path(path).read_text(encoding="utf-8").splitlines()
+    shown = lines[:limit] if limit else lines
+    body = "\n".join(f"{i:>5}  {ln}" for i, ln in enumerate(shown, 1))
+    if limit and len(lines) > limit:
+        body += f"\n… 还有 {len(lines) - limit} 行未显示"
+    return body or "(空文件)"
+
+
+@registry.tool("write", "写入文件（覆盖已有内容）。",
+               {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                "required": ["path", "content"]})
+def run_write(path: str, content: str) -> str:
+    f = safe_path(path)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(content, encoding="utf-8")
+    return f"已写入 {path}（{len(content)} 字节）"
+
+
+@registry.tool("edit", "把文件中某段精确文本替换成新文本。",
+               {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"},
+                                                 "new_text": {"type": "string"}},
+                "required": ["path", "old_text", "new_text"]})
+def run_edit(path: str, old_text: str, new_text: str) -> str:
+    f = safe_path(path)
+    text = f.read_text(encoding="utf-8")
+    if old_text not in text:
+        return f"错误：在 {path} 中找不到该文本。先用 read 确认当前内容。"
+    f.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
+    return f"已编辑 {path}"
+
+
+@registry.tool("glob", "按通配符查找文件。",
+               {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]})
+def run_glob(pattern: str) -> str:
+    hits = sorted(globlib.glob(pattern, root_dir=WORKSPACE, recursive=True))
+    return "\n".join(hits) if hits else "(无匹配)"
+
+
+@registry.tool("grep", "在工作区内按子串搜索文件内容。",
+               {"type": "object", "properties": {"pattern": {"type": "string"}, "glob": {"type": "string"}},
+                "required": ["pattern"]})
+def run_grep(pattern: str, glob: str = "**/*") -> str:
+    hits: list[str] = []
+    for name in sorted(globlib.glob(glob, root_dir=WORKSPACE, recursive=True)):
+        f = WORKSPACE / name
+        if not f.is_file():
+            continue
+        try:
+            for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                if pattern in line:
+                    hits.append(f"{name}:{i}:{line.strip()[:200]}")
+        except (UnicodeDecodeError, OSError):
+            continue
+    return "\n".join(hits[:100]) if hits else "(无匹配)"
+
+
+# ══════════════════════════════════════════════════════════════════
+# s06 改写：agent_loop → run_turn，显式的 Turn / Step 结构
+# ══════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class TurnOutcome:
+    turn: int
+    steps: int
+    reason: str
+    text: str
+
+
+def run_turn(provider, session: Session, executor: ToolExecutor, system: str,
+             inbox: Inbox, tracer: Tracer) -> TurnOutcome:
+    """跑完一个 turn。
+
+    turn 的定义（和工业 Harness 一致）：
+
+        turn = 一次**输入排空**（drain）。
+               它在认领第一批输入之前开启，在"什么都不欠了"之后关闭。
+
+        step = 一次模型请求 + 它引发的工具执行。
+               一个 turn 包含**零个或多个** step。
+
+    "零个"不是理论上的边角情况：turn 开了但输入被过滤空了 / 被拒绝了 /
+    被取消了，都会得到一个没有 step 的 turn。这条日志仍然有价值 ——
+    它记录了"有一次尝试发生过但没进模型"。
+
+    这一轮什么时候继续？两个条件，满足任一就再来一个 step：
+
+        · 模型还要工具（工具欠模型一次请求）
+        · inbox 里又来了新输入（用户中途插话）
+
+    注意这两个条件都**不是**在判断任务内容。Harness 仍然不知道
+    这是 debug 任务还是写文档任务。
+    """
+    turn = session.last_turn() + 1
+    session.append(EV_TURN_START, {"turn": turn})
+    tracer.turn_start(turn)
+
+    step = 0
+    reason = "natural-stop"
+    final_text = ""
+
+    while True:
+        claimed = inbox.claim()
+
+        # 没有任何输入可认领，而且这一轮还没跑过 step → 空 turn
+        if step == 0 and not claimed:
+            reason = "no-input"
+            break
+
+        step += 1
+        session.append(EV_STEP_START, {"turn": turn, "step": step})
+        tracer.step_start(turn, step, claimed)
+
+        # 认领到的输入，现在才变成 user/message 事件。
+        # 从 s05 的"输入立刻进日志"改成"输入先排队、被 step 认领时才进日志" ——
+        # 这样日志里 user/message 的位置就精确表达了"模型在第几步看到它"。
+        for item in claimed:
+            session.append(EV_USER_MESSAGE, {"turn": turn, "step": step,
+                                             "content": item.content, "source": item.source})
+
+        messages = derive_messages(session)
+        tools = executor.registry.schemas()
+        tracer.request(messages, tools, system)
+
+        reply = provider.chat(messages, tools=tools, system=system)
+        tracer.reply(reply)
+
+        session.append(EV_ASSISTANT_MESSAGE, {
+            "turn": turn, "step": step, "text": reply.text,
+            "tool_calls": reply.as_assistant_message().get("tool_calls", []),
+        })
+        if reply.usage:
+            session.append(EV_USAGE, {"turn": turn, "step": step, **reply.usage})
+
+        for call in reply.tool_calls:
+            if not tracer.enabled:
+                print(f"  \033[33m→ {call.name}\033[0m \033[90m{_brief(call.arguments)}\033[0m")
+            result = executor.execute(call.id, call.name, call.arguments, session, turn, step)
+            if not tracer.enabled:
+                mark = "\033[31m✗\033[0m" if result.is_error else "\033[32m✓\033[0m"
+                first = result.content[:140].splitlines()[0] if result.content else ""
+                print(f"    {mark} \033[90m{first}\033[0m")
+
+        session.append(EV_STEP_END, {"turn": turn, "step": step})
+        tracer.step_end(turn, step)
+
+        if reply.text:
+            final_text = reply.text
+
+        # ── 这一轮还欠着东西吗？ ──────────────────────────────────
+        if reply.wants_tools:
+            pass                      # 工具结果欠模型一次请求 → 继续
+        elif inbox:
+            pass                      # 用户中途插话 → 同一轮里继续
+        else:
+            reason = "natural-stop"   # 什么都不欠了 → 收工
+            break
+
+        if step >= MAX_STEPS_PER_TURN:
+            reason = "max-steps"
+            break
+
+    session.append(EV_TURN_END, {"turn": turn, "reason": reason, "steps": step})
+    tracer.turn_end(turn, reason, step)
+    return TurnOutcome(turn, step, reason, final_text)
+
+
+def _brief(args: dict) -> str:
+    return ", ".join(f"{k}={str(v)[:50]!r}" for k, v in args.items())
+
+
+# ══════════════════════════════════════════════════════════════════
+# 展示
+# ══════════════════════════════════════════════════════════════════
+
+
+def print_turn_tree(session: Session) -> None:
+    """把平坦的事件日志渲染成 turn/step 树。
+
+    这件事在 s05 是**做不到**的：日志里没有层次信息，
+    你无法知道第 7 号事件属于第几步。
+    """
+    print("\n\033[1m会话结构（从事件日志重建）\033[0m")
+    for ev in session.events():
+        d = ev.data
+        if ev.type == EV_TURN_START:
+            print(f"\033[1;34mTurn {d['turn']}\033[0m")
+        elif ev.type == EV_STEP_START:
+            print(f"  \033[34m├── Step {d['step']}\033[0m")
+        elif ev.type == EV_USER_MESSAGE:
+            print(f"  │     \033[36muser({d.get('source', 'user')})\033[0m  {d['content'][:46]}")
+        elif ev.type == EV_ASSISTANT_MESSAGE:
+            what = d["text"][:40] or f"(请求 {len(d['tool_calls'])} 个工具)"
+            print(f"  │     \033[32mmodel\033[0m       {what}")
+        elif ev.type == EV_TOOL_CALL:
+            print(f"  │     \033[33mtool call\033[0m   {d['name']}")
+        elif ev.type == EV_TOOL_RESULT:
+            print(f"  │     \033[33mtool result\033[0m {d['content'][:40].splitlines()[0] if d['content'] else ''}")
+        elif ev.type == EV_TURN_END:
+            print(f"  \033[1;34m└── Turn {d['turn']} end\033[0m  reason={d['reason']} steps={d['steps']}")
+
+
+# ══════════════════════════════════════════════════════════════════
+# 入口
+# ══════════════════════════════════════════════════════════════════
+
+
+def make_system(cwd: Path, reg: ToolRegistry) -> str:
+    return (f"你是一个编程 Agent，工作目录是 {cwd}。\n"
+            f"可用工具：{', '.join(reg.names())}。\n直接动手，不要解释。")
+
+
+def build_demo_workspace() -> Path:
+    d = Path(tempfile.mkdtemp(prefix="s06_demo_"))
+    (d / "app.py").write_text('VERSION = "0.1.0"\n\ndef main():\n    print(VERSION)\n', encoding="utf-8")
+    (d / "config.py").write_text("DEBUG = True\nTIMEOUT = 30\n", encoding="utf-8")
+    return d
+
+
+def demo(debug: bool) -> None:
+    global WORKSPACE
+    WORKSPACE = build_demo_workspace()
+    tracer = Tracer(enabled=debug)
+    executor = ToolExecutor(registry, PermissionPolicy(), lambda *a: True, tracer)
+    session = Session(path=WORKSPACE / "session.jsonl")
+    session.append(EV_SESSION_START, {"cwd": str(WORKSPACE)})
+    inbox = Inbox()
+    system = make_system(WORKSPACE, registry)
+
+    # ── Turn 1：一次输入，多个 step ─────────────────────────────
+    print("\033[1m【Turn 1】一次用户输入 → 3 个 step\033[0m")
+    q1 = "看一下 app.py，把版本号升到 0.2.0"
+    print(f"\033[36m你 > \033[0m{q1}")
+    inbox.put(q1)
+    script1 = [
+        scripted(calls=[("read", {"path": "app.py"})]),
+        scripted(calls=[("edit", {"path": "app.py", "old_text": "0.1.0", "new_text": "0.2.0"})]),
+        scripted("已把版本号升到 0.2.0。"),
+    ]
+    out1 = run_turn(get_provider(demo_script=script1), session, executor, system, inbox, tracer)
+    print(f"\033[32m模型 >\033[0m {out1.text}")
+    print(f"\033[90m→ Turn {out1.turn}: {out1.steps} 个 step，reason={out1.reason}\033[0m\n")
+
+    # ── Turn 2：模型跑到一半，用户插话 ───────────────────────────
+    print("\033[1m【Turn 2】模型跑到一半，用户插了一句话\033[0m")
+    q2 = "再检查一下 config.py"
+    print(f"\033[36m你 > \033[0m{q2}")
+    inbox.put(q2)
+
+    def steer_after_first_read(messages):
+        """第一次 read 之后，模拟用户中途插话。
+
+        插进来的话进 inbox，会被**同一个 turn 的下一个 step** 认领 ——
+        它不会另起一轮。这就是 turn = "输入排空" 的含义。
+        """
+        inbox.put("等等，顺便看看 app.py 里 main 函数还在不在", source="steering")
+        return scripted(calls=[("read", {"path": "config.py"})])
+
+    script2 = [
+        steer_after_first_read,
+        scripted(calls=[("grep", {"pattern": "def main"})]),
+        scripted("config.py 里 DEBUG=True、TIMEOUT=30；app.py 的 main 函数还在。"),
+    ]
+    out2 = run_turn(get_provider(demo_script=script2), session, executor, system, inbox, tracer)
+    print(f"\033[32m模型 >\033[0m {out2.text}")
+    print(f"\033[90m→ Turn {out2.turn}: {out2.steps} 个 step，reason={out2.reason}\033[0m\n")
+
+    # ── Turn 3：空 turn ──────────────────────────────────────────
+    print("\033[1m【Turn 3】没有任何输入 → 一个 0 step 的 turn\033[0m")
+    out3 = run_turn(get_provider(demo_script=[]), session, executor, system, inbox, tracer)
+    print(f"\033[90m→ Turn {out3.turn}: {out3.steps} 个 step，reason={out3.reason}"
+          f"（模型一次都没被调用，但这次尝试留在了日志里）\033[0m")
+
+    print_turn_tree(session)
+
+    steps = sum(1 for e in session.events() if e.type == EV_STEP_START)
+    turns = sum(1 for e in session.events() if e.type == EV_TURN_START)
+    users = sum(1 for e in session.events() if e.type == EV_USER_MESSAGE)
+    print(f"\n\033[90m{users} 条用户消息 → {turns} 个 turn → {steps} 个 step。三个数字互不相等。")
+    print("这就是这一章的全部内容：一次输入 ≠ 一次模型调用。")
+    print("加 --debug 看 Harness 内部逐步发生了什么。\033[0m")
+
+
+def main() -> None:
+    global WORKSPACE
+    debug = "--debug" in sys.argv
+    if "--demo" in sys.argv:
+        demo(debug)
+        return
+
+    try:
+        provider = get_provider()
+    except LLMError as e:
+        print(f"\033[31m{e}\033[0m")
+        return
+
+    tracer = Tracer(enabled=debug)
+    log_path = Path(f"session_{uuid.uuid4().hex[:8]}.jsonl")
+    session = Session(path=log_path)
+    session.append(EV_SESSION_START, {"cwd": str(WORKSPACE)})
+    executor = ToolExecutor(registry, PermissionPolicy(yolo="--yolo" in sys.argv), cli_approver, tracer)
+    inbox = Inbox()
+    system = make_system(WORKSPACE, registry)
+
+    print("\033[1ms06 — Turn and Step\033[0m")
+    print(f"\033[90m日志 {log_path}；/tree 查看结构，q 退出\033[0m\n")
+
+    while True:
+        try:
+            q = input("\033[36m你 > \033[0m").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if q.lower() in ("q", "quit", "exit", ""):
+            break
+        if q == "/tree":
+            print_turn_tree(session)
+            continue
+        inbox.put(q)
+        try:
+            out = run_turn(provider, session, executor, system, inbox, tracer)
+        except LLMError as e:
+            print(f"\033[31m{e}\033[0m")
+            break
+        print(f"\033[32m模型 >\033[0m {out.text}")
+        print(f"\033[90m[turn {out.turn} · {out.steps} steps · {out.reason}]\033[0m\n")
+
+
+if __name__ == "__main__":
+    main()

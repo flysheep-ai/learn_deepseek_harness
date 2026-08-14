@@ -1,0 +1,1030 @@
+#!/usr/bin/env python3
+"""s07 — Prompt Assembly
+
+    PromptSection(identity)      ┐
+    PromptSection(environment)   │
+    PromptSection(project)       ├─▶ SystemPromptRegistry.assemble(ctx) ─▶ system prompt
+    PromptSection(tools)         │              ▲
+    PromptSection(session_state) ┘              │
+                                          RuntimeContext
+                                      （cwd / 工具 / 轮次 / 已读文件…）
+
+这一章回答：**system prompt 是一个常量，还是一个运行时产物？**
+
+答案是后者。s06 那个 f-string 马上要装不下 s08–s12 要塞的东西了，
+而且里面有些内容**不是每次请求都需要**。
+
+这一章还引入一条工业不变量：把组装出来的 prompt 写进日志
+（request/header 事件），这样"每一次模型请求都能从日志重建"。
+
+运行：
+    python s07_prompt_assembly/code.py --demo
+    python s07_prompt_assembly/code.py --demo --debug
+    python s07_prompt_assembly/code.py --demo --show-prompt
+"""
+
+import glob as globlib
+import json
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from collections import deque
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from harness_llm import LLMError, get_provider, scripted  # noqa: E402
+
+MAX_STEPS_PER_TURN = 12
+
+
+# ══════════════════════════════════════════════════════════════════
+# 沿用 s05（未改动）：SessionEvent / Session
+# ══════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class SessionEvent:
+    seq: int
+    type: str
+    data: dict[str, Any]
+    time: float = field(default_factory=time.time)
+
+    def to_json(self) -> str:
+        return json.dumps({"seq": self.seq, "type": self.type, "time": self.time, "data": self.data},
+                          ensure_ascii=False)
+
+    @staticmethod
+    def from_json(line: str) -> "SessionEvent":
+        d = json.loads(line)
+        return SessionEvent(d["seq"], d["type"], d["data"], d.get("time", 0.0))
+
+
+EV_SESSION_START = "session/start"
+EV_USER_MESSAGE = "user/message"
+EV_ASSISTANT_MESSAGE = "assistant/message"
+EV_TOOL_CALL = "tool/call"
+EV_TOOL_RESULT = "tool/result"
+EV_PERMISSION = "permission/decision"
+EV_USAGE = "request/usage"
+
+# ── s06 新增的四个事件 ────────────────────────────────────────────
+#
+# 它们全是 log-only：turn / step 的边界是 Harness 的结构，
+# 不是给模型看的内容。模型只关心消息序列，不关心它被怎么分组。
+EV_TURN_START = "turn/start"
+EV_TURN_END = "turn/end"
+EV_STEP_START = "step/start"
+EV_STEP_END = "step/end"
+
+# ── s07 新增 ──────────────────────────────────────────────────────
+#
+# 组装出来的 system prompt + 工具 schema 也是**请求的一部分**，
+# 因此也必须能从日志重建。否则日志能还原 messages 却还原不了
+# "模型当时被告知了什么规则"，回放就是残缺的。
+#
+# 它是 log-only：prompt 不是消息，它是请求的信封。
+# 只在**发生变化**时记一条快照（prompt 每步都一样的话记 N 条纯属浪费）。
+EV_REQUEST_HEADER = "request/header"
+
+SURFACE_EVENTS = {EV_USER_MESSAGE, EV_ASSISTANT_MESSAGE, EV_TOOL_RESULT}
+
+
+class Session:
+    def __init__(self, session_id: str | None = None, path: Path | None = None) -> None:
+        self.id = session_id or f"ses_{uuid.uuid4().hex[:10]}"
+        self.path = path
+        self._events: list[SessionEvent] = []
+        self._seq = 0
+
+    def append(self, type_: str, data: dict[str, Any]) -> SessionEvent:
+        json.dumps(data, ensure_ascii=False)
+        self._seq += 1
+        ev = SessionEvent(self._seq, type_, data)
+        self._events.append(ev)
+        if self.path:
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(ev.to_json() + "\n")
+        return ev
+
+    def events(self, upto: int | None = None) -> list[SessionEvent]:
+        return [e for e in self._events if upto is None or e.seq <= upto]
+
+    def __len__(self) -> int:
+        return len(self._events)
+
+    def last_turn(self) -> int:
+        """从日志里读出当前轮次 —— 而不是在内存里维护一个计数器。
+
+        这不是洁癖。计数器是**第二份真相**：恢复会话时它归零，
+        于是新事件的 turn 号会和历史撞车，日志就废了。
+        turn 号必须和其他事实一样，从日志推导。
+        """
+        return max((e.data["turn"] for e in self._events if e.type == EV_TURN_START), default=0)
+
+    @classmethod
+    def load(cls, path: Path) -> "Session":
+        s = cls(session_id=path.stem, path=path)
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                ev = SessionEvent.from_json(line)
+                s._events.append(ev)
+                s._seq = max(s._seq, ev.seq)
+        return s
+
+
+def derive_messages(session: Session, upto: int | None = None) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    for ev in session.events(upto):
+        if ev.type not in SURFACE_EVENTS:
+            continue
+        if ev.type == EV_USER_MESSAGE:
+            messages.append({"role": "user", "content": ev.data["content"]})
+        elif ev.type == EV_ASSISTANT_MESSAGE:
+            msg: dict[str, Any] = {"role": "assistant", "content": ev.data.get("text", "")}
+            if ev.data.get("tool_calls"):
+                msg["tool_calls"] = ev.data["tool_calls"]
+            messages.append(msg)
+        elif ev.type == EV_TOOL_RESULT:
+            messages.append({"role": "tool", "tool_call_id": ev.data["call_id"], "content": ev.data["content"]})
+    return messages
+
+
+# ══════════════════════════════════════════════════════════════════
+# s06 新增：Inbox —— 输入不是"直接进上下文"，是先排队
+# ══════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class InboxItem:
+    content: str
+    source: str = "user"   # user | injected | steering
+
+
+class Inbox:
+    """待认领的输入队列。
+
+    s05 之前，用户输入是**立刻**变成 user/message 的。
+    这在单轮问答里没问题，一旦 turn 可能跨越多个 step，问题就来了：
+
+        用户在模型跑到第 3 步时插了一句"等等，先看看 config.py"。
+        这句话属于当前这一轮，还是下一轮？
+
+    答案是：它进 inbox 排队，由**下一个 step 认领**（claim）。
+    也就是说它属于当前 turn，会立刻影响模型的下一次请求，
+    而不是等这一轮全部结束。
+
+    这也解释了 turn 的准确定义：
+
+        turn = 一次输入的**排空**（drain）
+        只要 inbox 里还欠着东西，或者工具还欠模型一次请求，这一轮就没结束。
+
+    真实 Harness 里 inbox 还承载注入的上下文（文件变更通知、
+    子目录规范、定时任务提醒），来源不同但都走同一条认领路径。
+    我们这里保留了 source 字段，s08/s09/s12 会用到。
+    """
+
+    def __init__(self) -> None:
+        self._q: deque[InboxItem] = deque()
+
+    def put(self, content: str, source: str = "user") -> None:
+        self._q.append(InboxItem(content, source))
+
+    def claim(self) -> list[InboxItem]:
+        """认领当前排队的所有输入。认领即出队 —— 不会被认领两次。"""
+        items = list(self._q)
+        self._q.clear()
+        return items
+
+    def __bool__(self) -> bool:
+        return bool(self._q)
+
+
+# ══════════════════════════════════════════════════════════════════
+# s07 新增：Prompt Assembly
+# ══════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class RuntimeContext:
+    """组装 prompt 时能看到的运行时事实。
+
+    section 只能读它，不能读全局变量 —— 这条约束让每个 section
+    都可以被单独测试：给一个假的 RuntimeContext，断言它渲染出什么。
+
+    它会随着章节增长（s08 加 skills、s11 加 tasks、s12 加 jobs），
+    但增长的是**数据**，不是 assemble() 的逻辑。这正是重点。
+    """
+
+    cwd: Path
+    tool_names: list[str]
+    turn: int = 0
+    step: int = 0
+    project_notes: str | None = None       # AGENTS.md / CLAUDE.md 之类
+    files_read: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PromptSection:
+    """system prompt 的一块。
+
+    三个字段就够了：
+
+      name    身份，用于替换/移除（s14 的插件要靠它覆盖别人的 section）
+      order   排序权重，小的在前
+      render  (ctx) -> str | None；返回 None 表示**这次不出现**
+
+    最后那条是整章的关键。s06 的 f-string 里，每一块都是无条件拼进去的：
+    没有项目规范也要写一行"项目规范：无"，纯属浪费 token。
+    render 返回 None，这一块就干脆消失。
+
+        prompt 不是模板填空，是**按当前状态挑选内容**。
+    """
+
+    name: str
+    order: int
+    render: Callable[[RuntimeContext], str | None]
+
+
+class SystemPromptRegistry:
+    """按 order 排序，逐块渲染，跳过 None，拼起来。
+
+    整个类只有二十几行 —— 这是刻意的。
+    它的价值不在于逻辑复杂，而在于**它把"谁能往 prompt 里加东西"
+    这件事变成了一个注册动作**。
+
+    s06 的写法下，加一段 prompt 要去改 make_system() 那个函数；
+    到 s14 有了插件系统之后，那个函数会变成所有插件的争抢点。
+    现在插件只需要 register 一个 section，谁也不用碰别人的代码。
+    """
+
+    def __init__(self) -> None:
+        self._sections: dict[str, PromptSection] = {}
+
+    def register(self, section: PromptSection) -> None:
+        self._sections[section.name] = section     # 同名覆盖 = 替换
+
+    def section(self, name: str, order: int) -> Callable:
+        def deco(fn: Callable[[RuntimeContext], str | None]):
+            self.register(PromptSection(name, order, fn))
+            return fn
+        return deco
+
+    def remove(self, name: str) -> None:
+        self._sections.pop(name, None)
+
+    def names(self) -> list[str]:
+        return [s.name for s in sorted(self._sections.values(), key=lambda s: s.order)]
+
+    def assemble(self, ctx: RuntimeContext) -> str:
+        parts: list[str] = []
+        for sec in sorted(self._sections.values(), key=lambda s: s.order):
+            text = sec.render(ctx)
+            if text:                       # None 或空字符串都跳过
+                parts.append(text.strip())
+        return "\n\n".join(parts)
+
+    def explain(self, ctx: RuntimeContext) -> list[tuple[str, int]]:
+        """调试用：这次组装里，每个 section 贡献了多少字符。"""
+        out = []
+        for sec in sorted(self._sections.values(), key=lambda s: s.order):
+            text = sec.render(ctx) or ""
+            out.append((sec.name, len(text.strip())))
+        return out
+
+
+prompts = SystemPromptRegistry()
+
+
+@prompts.section("identity", 10)
+def _identity(ctx: RuntimeContext) -> str:
+    return "你是一个编程 Agent。直接动手完成任务，不要先解释你打算怎么做。"
+
+
+@prompts.section("environment", 20)
+def _environment(ctx: RuntimeContext) -> str:
+    return f"# 环境\n工作目录：{ctx.cwd}\n所有文件操作都被限制在这个目录内。"
+
+
+@prompts.section("project", 30)
+def _project(ctx: RuntimeContext) -> str | None:
+    # 条件性 section 的典型例子：没有 AGENTS.md 就一个字都不占。
+    # s06 的 f-string 做不到这一点 —— 它只能拼一句"项目规范：无"。
+    if not ctx.project_notes:
+        return None
+    return f"# 项目约定\n{ctx.project_notes.strip()}"
+
+
+@prompts.section("tools", 40)
+def _tools(ctx: RuntimeContext) -> str:
+    # 只写"怎么用"，不写"有哪些参数" —— 参数在 tool schema 里，
+    # 由 provider 单独发送。在 prompt 里重复一遍是常见的浪费，
+    # 而且两处会漂移（和 s03 讲的 schema/实现漂移是同一个病）。
+    return (f"# 工具\n可用工具：{', '.join(ctx.tool_names)}\n"
+            "读文件优先用 read 而不是 bash cat；查找用 glob/grep 而不是 find。")
+
+
+@prompts.section("session_state", 50)
+def _session_state(ctx: RuntimeContext) -> str | None:
+    """随会话推进而变化的一块 —— 证明 prompt 是运行时产物。
+
+    它每一步都可能不同：读过的文件越多，这一段越长。
+    如果 prompt 是常量，这种"让模型知道自己已经做过什么"的能力就没有。
+    """
+    if not ctx.files_read:
+        return None
+    # 注意这里**不写步号**。步号每步都变，会让 prompt 每步都不同，
+    # 于是 request/header 快照失去去重、provider 端的 prompt 缓存也全部失效。
+    # 只放模型真正需要的信息：它已经读过哪些文件。
+    return (f"# 当前进度（第 {ctx.turn} 轮）\n"
+            f"本轮已读取：{', '.join(ctx.files_read)}\n不要重复读同一个文件。")
+
+
+# ══════════════════════════════════════════════════════════════════
+# s06 新增：Tracer —— 把 Harness 内部正在发生的事情显示出来
+# ══════════════════════════════════════════════════════════════════
+
+
+class Tracer:
+    """Harness 是抽象系统，看不见就学不会。
+
+    刻意做成一个**独立对象**而不是散落的 print：
+    s13 会把它整个换成一个事件监听器，那时 loop 里的 tracer 调用会消失。
+    先让它有形状，才好在后面把它拆走。
+    """
+
+    def __init__(self, enabled: bool = False) -> None:
+        self.enabled = enabled
+
+    def turn_start(self, turn: int) -> None:
+        if self.enabled:
+            print(f"\033[1;34m[turn {turn} start]\033[0m")
+
+    def turn_end(self, turn: int, reason: str, steps: int) -> None:
+        if self.enabled:
+            print(f"\033[1;34m[turn {turn} end]\033[0m reason={reason} steps={steps}\n")
+
+    def step_start(self, turn: int, step: int, claimed: list[InboxItem]) -> None:
+        if self.enabled:
+            print(f"  \033[34m[step {step}]\033[0m", end="")
+            print(f"  claimed={len(claimed)}" + (f" ({claimed[0].source})" if claimed else ""))
+
+    def request(self, messages: list, tools: list, system: str) -> None:
+        if self.enabled:
+            print(f"    \033[90m→ model request   messages={len(messages)} tools={len(tools)} "
+                  f"system={len(system)}chars\033[0m")
+
+    def reply(self, reply) -> None:
+        if self.enabled:
+            names = ",".join(c.name for c in reply.tool_calls) or "-"
+            print(f"    \033[90m← model reply     text={len(reply.text)}chars "
+                  f"tool_calls={len(reply.tool_calls)} [{names}] "
+                  f"usage={reply.usage.get('input', 0)}/{reply.usage.get('output', 0)}\033[0m")
+
+    def tool_pre(self, name: str, args: dict, verdict: str) -> None:
+        if self.enabled:
+            print(f"    \033[90m· tool pre        {name} {_brief(args)[:60]} → {verdict}\033[0m")
+
+    def tool_result(self, name: str, result: "ToolResult") -> None:
+        if self.enabled:
+            state = "error" if result.is_error else "ok"
+            print(f"    \033[90m· tool result     {name} {state} {len(result.content)}B\033[0m")
+
+    def step_end(self, turn: int, step: int) -> None:
+        if self.enabled:
+            print(f"  \033[34m[step {step} end]\033[0m")
+
+
+# ══════════════════════════════════════════════════════════════════
+# 沿用 s03–s05（未改动）：Tool / ToolResult / ToolRegistry / 权限
+# ══════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    content: str
+    is_error: bool = False
+
+
+@dataclass(frozen=True)
+class Tool:
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    handler: Callable[..., str]
+
+    @property
+    def required(self) -> list[str]:
+        return list(self.parameters.get("required", []))
+
+    def schema(self) -> dict[str, Any]:
+        return {"name": self.name, "description": self.description, "parameters": self.parameters}
+
+
+class ToolRegistry:
+    def __init__(self) -> None:
+        self._tools: dict[str, Tool] = {}
+
+    def register(self, tool: Tool) -> None:
+        if tool.name in self._tools:
+            raise ValueError(f"工具重名：{tool.name}")
+        self._tools[tool.name] = tool
+
+    def tool(self, name: str, description: str, parameters: dict[str, Any]) -> Callable:
+        def deco(fn):
+            self.register(Tool(name, description, parameters, fn))
+            return fn
+        return deco
+
+    def get(self, name: str) -> Tool | None:
+        return self._tools.get(name)
+
+    def names(self) -> list[str]:
+        return list(self._tools)
+
+    def schemas(self) -> list[dict[str, Any]]:
+        return [t.schema() for t in self._tools.values()]
+
+
+class Decision(str, Enum):
+    ALLOW = "allow"
+    ASK = "ask"
+    DENY = "deny"
+
+
+@dataclass(frozen=True)
+class Verdict:
+    decision: Decision
+    reason: str = ""
+
+
+DENY_PATTERNS = [
+    (r"\brm\s+(-\w+\s+)*-\w*[rf]\w*\s+(/|~|\$HOME)(\s|$)", "递归删除根目录或家目录"),
+    (r":\(\)\s*\{.*\}\s*;\s*:", "fork 炸弹"),
+    (r"\bmkfs(\.\w+)?\b", "格式化文件系统"),
+    (r"\bshutdown\b|\breboot\b|\bhalt\b", "关机/重启"),
+    (r"curl[^|]*\|\s*(sudo\s+)?(ba)?sh", "把远程脚本直接管进 shell"),
+]
+SAFE_BASH = re.compile(
+    r"^\s*(ls|pwd|cat|head|tail|wc|file|stat|find|grep|rg|which|echo|date|"
+    r"git\s+(status|log|diff|show|branch)|pytest|python3?\s+-m\s+pytest|"
+    r"python3?\s+--version|uname|env|df|du)\b"
+)
+
+
+class PermissionPolicy:
+    def __init__(self, yolo: bool = False) -> None:
+        self.yolo = yolo
+
+    def check(self, name: str, args: dict[str, Any]) -> Verdict:
+        if self.yolo:
+            return Verdict(Decision.ALLOW, "yolo 模式")
+        if name in ("read", "glob", "grep"):
+            return Verdict(Decision.ALLOW, "只读操作")
+        if name in ("write", "edit"):
+            return Verdict(Decision.ASK, f"将修改文件 {args.get('path', '?')}")
+        if name == "bash":
+            cmd = str(args.get("command", ""))
+            for pattern, why in DENY_PATTERNS:
+                if re.search(pattern, cmd):
+                    return Verdict(Decision.DENY, why)
+            if SAFE_BASH.match(cmd):
+                return Verdict(Decision.ALLOW, "只读命令")
+            return Verdict(Decision.ASK, "将执行 shell 命令")
+        return Verdict(Decision.ASK, "未定义规则的工具")
+
+
+Approver = Callable[[str, dict[str, Any], str], bool]
+
+
+def cli_approver(name: str, args: dict[str, Any], reason: str) -> bool:
+    print(f"\n  \033[35m[需要批准]\033[0m {name} — {reason}")
+    for k, v in args.items():
+        print(f"    {k} = {str(v)[:300]}")
+    try:
+        return input("  批准执行？[y/N] ").strip().lower() in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+
+# ══════════════════════════════════════════════════════════════════
+# 沿用 s05（仅加入 tracer 回调）：ToolExecutor
+# ══════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class ToolCallCtx:
+    call_id: str
+    name: str
+    arguments: dict[str, Any]
+    turn: int
+    step: int
+    verdict: Verdict | None = None
+
+
+class ToolExecutor:
+    def __init__(self, registry: ToolRegistry, policy: PermissionPolicy,
+                 approver: Approver, tracer: Tracer) -> None:
+        self.registry = registry
+        self.policy = policy
+        self.approver = approver
+        self.tracer = tracer
+
+    def pre_execute(self, ctx: ToolCallCtx, session: Session) -> ToolResult | None:
+        tool = self.registry.get(ctx.name)
+        if tool is None:
+            self.tracer.tool_pre(ctx.name, ctx.arguments, "unknown-tool")
+            return ToolResult(f"错误：没有名为 '{ctx.name}' 的工具。可用工具：{', '.join(self.registry.names())}",
+                              is_error=True)
+        missing = [k for k in tool.required if k not in ctx.arguments]
+        if missing:
+            self.tracer.tool_pre(ctx.name, ctx.arguments, "missing-args")
+            return ToolResult(f"错误：{ctx.name} 缺少必填参数：{', '.join(missing)}", is_error=True)
+
+        ctx.verdict = self.policy.check(ctx.name, ctx.arguments)
+        approved: bool | None = None
+        if ctx.verdict.decision is Decision.ASK:
+            approved = self.approver(ctx.name, ctx.arguments, ctx.verdict.reason)
+
+        self.tracer.tool_pre(ctx.name, ctx.arguments,
+                             ctx.verdict.decision.value + ("" if approved is None else f"→{'y' if approved else 'n'}"))
+        session.append(EV_PERMISSION, {
+            "turn": ctx.turn, "step": ctx.step, "call_id": ctx.call_id, "tool": ctx.name,
+            "decision": ctx.verdict.decision.value, "reason": ctx.verdict.reason, "approved": approved,
+        })
+
+        if ctx.verdict.decision is Decision.DENY:
+            return ToolResult(f"权限拒绝：{ctx.verdict.reason}。这个操作在本环境中被禁止，请换一种方式。",
+                              is_error=True)
+        if approved is False:
+            return ToolResult("用户拒绝了这次操作。请换一种方式，或者先说明你为什么需要它。", is_error=True)
+        return None
+
+    def run_body(self, ctx: ToolCallCtx) -> ToolResult:
+        tool = self.registry.get(ctx.name)
+        assert tool is not None
+        known = set(tool.parameters.get("properties", {}))
+        cleaned = {k: v for k, v in ctx.arguments.items() if k in known}
+        try:
+            return ToolResult(tool.handler(**cleaned))
+        except Exception as e:  # noqa: BLE001
+            return ToolResult(f"错误：{type(e).__name__}: {e}", is_error=True)
+
+    def post_execute(self, ctx: ToolCallCtx, result: ToolResult) -> ToolResult:
+        if len(result.content) > 20000:
+            head, tail = result.content[:12000], result.content[-4000:]
+            result = ToolResult(f"{head}\n\n…（省略 {len(result.content) - 16000} 字符）…\n\n{tail}",
+                                result.is_error)
+        self.tracer.tool_result(ctx.name, result)
+        return result
+
+    def execute(self, call_id: str, name: str, arguments: dict[str, Any],
+                session: Session, turn: int, step: int) -> ToolResult:
+        ctx = ToolCallCtx(call_id, name, arguments, turn, step)
+        # 所有 tool 事件现在都带 turn/step 坐标 —— 日志从"平的"变成"有层次的"
+        session.append(EV_TOOL_CALL, {"turn": turn, "step": step, "call_id": call_id,
+                                      "name": name, "arguments": arguments})
+        short = self.pre_execute(ctx, session)
+        result = short if short is not None else self.run_body(ctx)
+        result = self.post_execute(ctx, result)
+        session.append(EV_TOOL_RESULT, {"turn": turn, "step": step, "call_id": call_id,
+                                        "name": name, "content": result.content, "is_error": result.is_error})
+        return result
+
+
+# ══════════════════════════════════════════════════════════════════
+# 沿用 s03–s05（未改动）：六个工具
+# ══════════════════════════════════════════════════════════════════
+
+registry = ToolRegistry()
+WORKSPACE = Path.cwd()
+
+
+def safe_path(p: str) -> Path:
+    root = WORKSPACE.resolve()
+    path = (root / p).resolve()
+    if path != root and root not in path.parents:
+        raise ValueError(f"路径越界，超出工作区：{p}")
+    return path
+
+
+@registry.tool("bash", "在工作目录下执行一条 shell 命令。",
+               {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]})
+def run_bash(command: str) -> str:
+    try:
+        r = subprocess.run(command, shell=True, cwd=WORKSPACE, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=60)
+        out = (r.stdout + r.stderr).strip()
+        if r.returncode != 0:
+            out = f"[exit {r.returncode}]\n{out}"
+        return out[:20000] if out else "(无输出)"
+    except subprocess.TimeoutExpired:
+        return "错误：命令超时（60 秒）"
+
+
+@registry.tool("read", "读取文件内容，返回带行号的文本。",
+               {"type": "object", "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}},
+                "required": ["path"]})
+def run_read(path: str, limit: int | None = None) -> str:
+    lines = safe_path(path).read_text(encoding="utf-8").splitlines()
+    shown = lines[:limit] if limit else lines
+    body = "\n".join(f"{i:>5}  {ln}" for i, ln in enumerate(shown, 1))
+    if limit and len(lines) > limit:
+        body += f"\n… 还有 {len(lines) - limit} 行未显示"
+    return body or "(空文件)"
+
+
+@registry.tool("write", "写入文件（覆盖已有内容）。",
+               {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                "required": ["path", "content"]})
+def run_write(path: str, content: str) -> str:
+    f = safe_path(path)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(content, encoding="utf-8")
+    return f"已写入 {path}（{len(content)} 字节）"
+
+
+@registry.tool("edit", "把文件中某段精确文本替换成新文本。",
+               {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"},
+                                                 "new_text": {"type": "string"}},
+                "required": ["path", "old_text", "new_text"]})
+def run_edit(path: str, old_text: str, new_text: str) -> str:
+    f = safe_path(path)
+    text = f.read_text(encoding="utf-8")
+    if old_text not in text:
+        return f"错误：在 {path} 中找不到该文本。先用 read 确认当前内容。"
+    f.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
+    return f"已编辑 {path}"
+
+
+@registry.tool("glob", "按通配符查找文件。",
+               {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]})
+def run_glob(pattern: str) -> str:
+    hits = sorted(globlib.glob(pattern, root_dir=WORKSPACE, recursive=True))
+    return "\n".join(hits) if hits else "(无匹配)"
+
+
+@registry.tool("grep", "在工作区内按子串搜索文件内容。",
+               {"type": "object", "properties": {"pattern": {"type": "string"}, "glob": {"type": "string"}},
+                "required": ["pattern"]})
+def run_grep(pattern: str, glob: str = "**/*") -> str:
+    hits: list[str] = []
+    for name in sorted(globlib.glob(glob, root_dir=WORKSPACE, recursive=True)):
+        f = WORKSPACE / name
+        if not f.is_file():
+            continue
+        try:
+            for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                if pattern in line:
+                    hits.append(f"{name}:{i}:{line.strip()[:200]}")
+        except (UnicodeDecodeError, OSError):
+            continue
+    return "\n".join(hits[:100]) if hits else "(无匹配)"
+
+
+# ══════════════════════════════════════════════════════════════════
+# s06 改写：agent_loop → run_turn，显式的 Turn / Step 结构
+# ══════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class TurnOutcome:
+    turn: int
+    steps: int
+    reason: str
+    text: str
+
+
+def run_turn(provider, session: Session, executor: ToolExecutor, rt: RuntimeContext,
+             inbox: Inbox, tracer: Tracer) -> TurnOutcome:
+    """跑完一个 turn。
+
+    turn 的定义（和工业 Harness 一致）：
+
+        turn = 一次**输入排空**（drain）。
+               它在认领第一批输入之前开启，在"什么都不欠了"之后关闭。
+
+        step = 一次模型请求 + 它引发的工具执行。
+               一个 turn 包含**零个或多个** step。
+
+    "零个"不是理论上的边角情况：turn 开了但输入被过滤空了 / 被拒绝了 /
+    被取消了，都会得到一个没有 step 的 turn。这条日志仍然有价值 ——
+    它记录了"有一次尝试发生过但没进模型"。
+
+    这一轮什么时候继续？两个条件，满足任一就再来一个 step：
+
+        · 模型还要工具（工具欠模型一次请求）
+        · inbox 里又来了新输入（用户中途插话）
+
+    注意这两个条件都**不是**在判断任务内容。Harness 仍然不知道
+    这是 debug 任务还是写文档任务。
+    """
+    turn = session.last_turn() + 1
+    session.append(EV_TURN_START, {"turn": turn})
+    tracer.turn_start(turn)
+
+    step = 0
+    reason = "natural-stop"
+    final_text = ""
+    last_header: str | None = None    # 上一次记进日志的 prompt，用于去重
+    rt.turn = turn
+    rt.files_read = []                # 进度类信息按轮重置
+
+    while True:
+        claimed = inbox.claim()
+
+        # 没有任何输入可认领，而且这一轮还没跑过 step → 空 turn
+        if step == 0 and not claimed:
+            reason = "no-input"
+            break
+
+        step += 1
+        session.append(EV_STEP_START, {"turn": turn, "step": step})
+        tracer.step_start(turn, step, claimed)
+
+        # 认领到的输入，现在才变成 user/message 事件。
+        # 从 s05 的"输入立刻进日志"改成"输入先排队、被 step 认领时才进日志" ——
+        # 这样日志里 user/message 的位置就精确表达了"模型在第几步看到它"。
+        for item in claimed:
+            session.append(EV_USER_MESSAGE, {"turn": turn, "step": step,
+                                             "content": item.content, "source": item.source})
+
+        # ── s07：prompt 在**每一步**重新组装 ─────────────────────
+        #
+        # 不是每轮一次，是每步一次。因为 session_state 这类 section
+        # 的内容会在同一轮内变化（刚读完一个文件，下一步就该知道）。
+        #
+        # 组装是纯函数：assemble(ctx) 的结果只取决于 ctx，
+        # 所以它便宜、可测、可预测。
+        rt.step = step
+        rt.tool_names = executor.registry.names()
+        system = prompts.assemble(rt)
+
+        messages = derive_messages(session)
+        tools = executor.registry.schemas()
+        tracer.request(messages, tools, system)
+
+        # 只在 prompt 发生**变化**时记一条快照。
+        # 记全量太吵，不记则日志无法重建请求 —— 变化时记是两者的交点。
+        if system != last_header:
+            session.append(EV_REQUEST_HEADER, {
+                "turn": turn, "step": step,
+                "system": system,
+                "tools": [t["name"] for t in tools],
+                "sections": [n for n, size in prompts.explain(rt) if size],
+            })
+            last_header = system
+
+        reply = provider.chat(messages, tools=tools, system=system)
+        tracer.reply(reply)
+
+        session.append(EV_ASSISTANT_MESSAGE, {
+            "turn": turn, "step": step, "text": reply.text,
+            "tool_calls": reply.as_assistant_message().get("tool_calls", []),
+        })
+        if reply.usage:
+            session.append(EV_USAGE, {"turn": turn, "step": step, **reply.usage})
+
+        for call in reply.tool_calls:
+            if not tracer.enabled:
+                print(f"  \033[33m→ {call.name}\033[0m \033[90m{_brief(call.arguments)}\033[0m")
+            result = executor.execute(call.id, call.name, call.arguments, session, turn, step)
+
+            # 把执行结果反馈到 RuntimeContext，下一步组装 prompt 时就能用上。
+            # 这条线是"prompt 是运行时产物"最直观的证据：
+            # 工具执行改变了 ctx，ctx 改变了 prompt，prompt 改变了模型看到的内容。
+            if call.name == "read" and not result.is_error:
+                p = str(call.arguments.get("path", ""))
+                if p and p not in rt.files_read:
+                    rt.files_read.append(p)
+
+            if not tracer.enabled:
+                mark = "\033[31m✗\033[0m" if result.is_error else "\033[32m✓\033[0m"
+                first = result.content[:140].splitlines()[0] if result.content else ""
+                print(f"    {mark} \033[90m{first}\033[0m")
+
+        session.append(EV_STEP_END, {"turn": turn, "step": step})
+        tracer.step_end(turn, step)
+
+        if reply.text:
+            final_text = reply.text
+
+        # ── 这一轮还欠着东西吗？ ──────────────────────────────────
+        if reply.wants_tools:
+            pass                      # 工具结果欠模型一次请求 → 继续
+        elif inbox:
+            pass                      # 用户中途插话 → 同一轮里继续
+        else:
+            reason = "natural-stop"   # 什么都不欠了 → 收工
+            break
+
+        if step >= MAX_STEPS_PER_TURN:
+            reason = "max-steps"
+            break
+
+    session.append(EV_TURN_END, {"turn": turn, "reason": reason, "steps": step})
+    tracer.turn_end(turn, reason, step)
+    return TurnOutcome(turn, step, reason, final_text)
+
+
+def _brief(args: dict) -> str:
+    return ", ".join(f"{k}={str(v)[:50]!r}" for k, v in args.items())
+
+
+# ══════════════════════════════════════════════════════════════════
+# 展示
+# ══════════════════════════════════════════════════════════════════
+
+
+def print_turn_tree(session: Session) -> None:
+    """把平坦的事件日志渲染成 turn/step 树。
+
+    这件事在 s05 是**做不到**的：日志里没有层次信息，
+    你无法知道第 7 号事件属于第几步。
+    """
+    print("\n\033[1m会话结构（从事件日志重建）\033[0m")
+    for ev in session.events():
+        d = ev.data
+        if ev.type == EV_TURN_START:
+            print(f"\033[1;34mTurn {d['turn']}\033[0m")
+        elif ev.type == EV_STEP_START:
+            print(f"  \033[34m├── Step {d['step']}\033[0m")
+        elif ev.type == EV_USER_MESSAGE:
+            print(f"  │     \033[36muser({d.get('source', 'user')})\033[0m  {d['content'][:46]}")
+        elif ev.type == EV_ASSISTANT_MESSAGE:
+            what = d["text"][:40] or f"(请求 {len(d['tool_calls'])} 个工具)"
+            print(f"  │     \033[32mmodel\033[0m       {what}")
+        elif ev.type == EV_TOOL_CALL:
+            print(f"  │     \033[33mtool call\033[0m   {d['name']}")
+        elif ev.type == EV_TOOL_RESULT:
+            print(f"  │     \033[33mtool result\033[0m {d['content'][:40].splitlines()[0] if d['content'] else ''}")
+        elif ev.type == EV_TURN_END:
+            print(f"  \033[1;34m└── Turn {d['turn']} end\033[0m  reason={d['reason']} steps={d['steps']}")
+
+
+# ══════════════════════════════════════════════════════════════════
+# 入口
+# ══════════════════════════════════════════════════════════════════
+
+
+def load_project_notes(cwd: Path) -> str | None:
+    """项目约定文件。有就读，没有就 None（对应的 section 会整块消失）。"""
+    for name in ("AGENTS.md", "CLAUDE.md", ".agent.md"):
+        f = cwd / name
+        if f.exists():
+            return f.read_text(encoding="utf-8")[:4000]
+    return None
+
+
+def build_demo_workspace(with_notes: bool = True) -> Path:
+    d = Path(tempfile.mkdtemp(prefix="s07_demo_"))
+    (d / "app.py").write_text('VERSION = "0.1.0"\n\ndef main():\n    print(VERSION)\n', encoding="utf-8")
+    (d / "config.py").write_text("DEBUG = True\nTIMEOUT = 30\n", encoding="utf-8")
+    if with_notes:
+        (d / "AGENTS.md").write_text(
+            "- 版本号统一写在 app.py 顶部的 VERSION 常量里\n"
+            "- 改完代码必须运行 `python3 app.py` 验证\n", encoding="utf-8")
+    return d
+
+
+def print_prompt_breakdown(rt: RuntimeContext, title: str) -> None:
+    rows = prompts.explain(rt)
+    total = sum(size for _, size in rows)
+    print(f"\n\033[1m{title}\033[0m  \033[90m（共 {total} 字符）\033[0m")
+    for name, size in rows:
+        if size:
+            bar = "█" * max(1, size // 12)
+            print(f"  \033[36m{name:<14}\033[0m {size:>4}  \033[90m{bar}\033[0m")
+        else:
+            print(f"  \033[90m{name:<14}    -  （本次不出现）\033[0m")
+
+
+def demo(debug: bool) -> None:
+    global WORKSPACE
+    WORKSPACE = build_demo_workspace(with_notes=True)
+    tracer = Tracer(enabled=debug)
+    executor = ToolExecutor(registry, PermissionPolicy(), lambda *a: True, tracer)
+    session = Session(path=WORKSPACE / "session.jsonl")
+    session.append(EV_SESSION_START, {"cwd": str(WORKSPACE)})
+    inbox = Inbox()
+
+    rt = RuntimeContext(
+        cwd=WORKSPACE,
+        tool_names=registry.names(),
+        project_notes=load_project_notes(WORKSPACE),
+    )
+
+    # ── 组装前后对比：有没有 AGENTS.md，prompt 完全不同 ──────────
+    print("\033[1m【1】同样的 section 集合，不同的运行时状态 → 不同的 prompt\033[0m")
+    empty_rt = RuntimeContext(cwd=WORKSPACE, tool_names=registry.names())
+    print_prompt_breakdown(empty_rt, "冷启动（无 AGENTS.md，无进度）")
+    print_prompt_breakdown(rt, "有 AGENTS.md 的同一个工作区")
+
+    # ── 跑一轮，观察 prompt 在轮内变化 ───────────────────────────
+    print("\n\033[1m【2】跑一轮，观察 prompt 在轮内自己变长\033[0m")
+    q = "把版本号升到 0.2.0"
+    print(f"\033[36m你 > \033[0m{q}")
+    inbox.put(q)
+    script = [
+        scripted(calls=[("read", {"path": "app.py"})]),
+        scripted(calls=[("edit", {"path": "app.py", "old_text": "0.1.0", "new_text": "0.2.0"})]),
+        scripted(calls=[("bash", {"command": "python3 app.py"})]),
+        scripted("已升到 0.2.0，并按 AGENTS.md 的要求运行验证过了。"),
+    ]
+    out = run_turn(get_provider(demo_script=script), session, executor, rt, inbox, tracer)
+    print(f"\033[32m模型 >\033[0m {out.text}")
+
+    # ── 日志里记了几份 prompt 快照 ───────────────────────────────
+    headers = [e for e in session.events() if e.type == EV_REQUEST_HEADER]
+    print(f"\n\033[1m【3】日志里的 request/header 快照：{len(headers)} 条"
+          f"（这一轮跑了 {out.steps} 个 step）\033[0m")
+    for h in headers:
+        d = h.data
+        print(f"  \033[90m#{h.seq:>2} step {d['step']}  sections={','.join(d['sections'])}  "
+              f"{len(d['system'])} 字符\033[0m")
+    print("\033[90m  只在 prompt 发生变化时记快照 —— 所以数量少于 step 数。\033[0m")
+
+    if "--show-prompt" in sys.argv:
+        print("\n\033[1m最后一次组装出的完整 system prompt\033[0m")
+        print("\033[90m" + "─" * 66)
+        print(headers[-1].data["system"])
+        print("─" * 66 + "\033[0m")
+
+    # ── 动态增删 section ─────────────────────────────────────────
+    print("\n\033[1m【4】运行时加一个 section（不改任何已有代码）\033[0m")
+
+    @prompts.section("safety_note", 60)
+    def _safety(c: RuntimeContext) -> str:
+        return "# 注意\n本环境禁止访问网络。"
+
+    print_prompt_breakdown(rt, "注册 safety_note 之后")
+    prompts.remove("safety_note")
+
+    print("\n\033[90m" + "─" * 66)
+    print("这一章的三句话：")
+    print("  1. prompt 是**每次请求现场组装**的运行时产物，不是常量")
+    print("  2. section 可以返回 None ——「这次不出现」是一等能力")
+    print("  3. 组装结果进日志（request/header），请求才是可重建的\033[0m")
+
+
+def main() -> None:
+    global WORKSPACE
+    debug = "--debug" in sys.argv
+    if "--demo" in sys.argv:
+        demo(debug)
+        return
+
+    try:
+        provider = get_provider()
+    except LLMError as e:
+        print(f"\033[31m{e}\033[0m")
+        return
+
+    tracer = Tracer(enabled=debug)
+    log_path = Path(f"session_{uuid.uuid4().hex[:8]}.jsonl")
+    session = Session(path=log_path)
+    session.append(EV_SESSION_START, {"cwd": str(WORKSPACE)})
+    executor = ToolExecutor(registry, PermissionPolicy(yolo="--yolo" in sys.argv), cli_approver, tracer)
+    inbox = Inbox()
+    rt = RuntimeContext(cwd=WORKSPACE, tool_names=registry.names(),
+                        project_notes=load_project_notes(WORKSPACE))
+
+    print("\033[1ms07 — Prompt Assembly\033[0m")
+    print(f"\033[90msections: {', '.join(prompts.names())}\033[0m")
+    print(f"\033[90m日志 {log_path}；/prompt 查看当前组装结果，/tree 查看结构，q 退出\033[0m\n")
+
+    while True:
+        try:
+            q = input("\033[36m你 > \033[0m").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if q.lower() in ("q", "quit", "exit", ""):
+            break
+        if q == "/tree":
+            print_turn_tree(session)
+            continue
+        if q == "/prompt":
+            print_prompt_breakdown(rt, "当前 system prompt 构成")
+            print("\033[90m" + "─" * 60)
+            print(prompts.assemble(rt))
+            print("─" * 60 + "\033[0m")
+            continue
+        inbox.put(q)
+        try:
+            out = run_turn(provider, session, executor, rt, inbox, tracer)
+        except LLMError as e:
+            print(f"\033[31m{e}\033[0m")
+            break
+        print(f"\033[32m模型 >\033[0m {out.text}")
+        print(f"\033[90m[turn {out.turn} · {out.steps} steps · {out.reason}]\033[0m\n")
+
+
+if __name__ == "__main__":
+    main()
