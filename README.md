@@ -61,6 +61,36 @@ each fully runnable on its own**.
 
 ---
 
+## What makes deepseek-harness different
+
+A generic harness tutorial teaches the 60-line loop this course opens with —
+`while True: call the model, run its tools, append messages`. What it rarely
+teaches is *why an industrial harness looks nothing like that loop*. And most of
+the distance is **not "more features"**, but a handful of **named structural
+decisions**. Those decisions are the real subject of this course:
+
+| Distinctive decision | Why it isn't obvious | Chapter | Minimal form here |
+|---|---|---|---|
+| **The event log is the truth** | `messages` looks like the memory, but it's only a *projection*; what's actually stored is an append-only log | s05 | `Session` + `derive_messages()` |
+| **Turn / Step / Round** | "one input" ≠ "one model call"; without the words you can't reason about budgets, replay, or rejected turns | s06 | `run_turn()` + inner step loop |
+| **Permission is a listener, not an `if`** | tool execution is a *waterfall* (`pre → execute → post`); policy hangs off it and can be added/removed without touching the loop | s04 → s13 | a 6-line `EventBus.waterfall` |
+| **Capability seams** | Definition / Provider / Consumer — swap one provider and the whole product follows, with no provider forks | s15 | `FileSystem` / `Shell` Protocols + Local / Memory / DryRun |
+| **Everything is a plugin** | there is no privileged core to patch; a feature is one unit, mounted whole and unmounted whole | s14 | `PluginContext` + reverse-order disposers |
+| **Reversible effects** | registration returns its own inverse, so composite cleanup is automatic — the reason plugins can hot-unload | s14 + [notes](docs/cordis-paper-spatiotemporal-composability.md) | `on()/use()/register()` return a disposer |
+| **Scope** | a subagent's value is context isolation + a *restricted action space*, not "one more LLM call" | s09 | `registry.restricted()` |
+| **Goal as persistent state** | a goal survives the terminal and is judged by the model, not by `while not done` | s17 | `GoalStore` over the event log |
+
+What makes deepseek-harness genuinely **unique** is the last link in this chain:
+these ideas are not folklore — they are grounded in a formal paper, **Cordis**
+(*revertible effects* + *reactive coeffects*). This course re-expresses the
+paper's core with a 30-line `EventBus` + `PluginContext`, and the
+[paper reading notes](docs/cordis-paper-spatiotemporal-composability.md) map
+every Cordis concept back to a chapter — including what was deliberately
+**not** ported (reactive coeffects, fiber lifecycles, the confluence theorem).
+Reading path: [docs/](docs/README.md).
+
+---
+
 ## The learning path
 
 ```
@@ -220,17 +250,21 @@ The test suite scans the harness core to confirm there is no branch like
   — absorbed its **industrial design**: Session Event Log, Turn/Step vocabulary,
   the tool execution pipeline, Capability Seams, everything-is-a-plugin.
   But not its Cordis framework — the same ideas are expressed here with a 30-line
-  EventBus + PluginContext.
+  EventBus + PluginContext. See
+  ["What makes deepseek-harness different"](#what-makes-deepseek-harness-different)
+  for the concept → chapter map.
 
 This project is **not** a fork, translation, or rewrite of either repository.
 Research findings and design decisions: [DESIGN.md](DESIGN.md).
 
 ## Further reading
 
+- [docs/README.md](docs/README.md) — the index to this course's supplementary
+  reading and the suggested reading path.
 - [Cordis paper notes (Chinese): Revertible Effects and Reactive Coeffects](docs/cordis-paper-spatiotemporal-composability.md)
   — a Chinese reading guide to the 88-page formal paper underlying
   deepseek-harness's Cordis framework, including a side-by-side mapping to
-  chapters s13/s14 of this course. Best read after finishing all 18 chapters.
+  chapters s13/s14/s15 of this course. Best read after finishing those chapters.
 
 ## After the 18 chapters
 

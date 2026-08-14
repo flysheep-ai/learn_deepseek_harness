@@ -58,6 +58,33 @@ complete, self-contained, offline-runnable Python file.
 
 ---
 
+## deepseek-harness 到底「不同」在哪
+
+普通的 harness 教程只会教你本课程开篇的那 60 行循环 ——
+`while True: 调模型 → 跑工具 → 追加 messages`。它很少告诉你，
+为什么工业级 harness 和这个循环长得完全不一样。而这段距离的绝大部分
+**不是「功能更多」，而是少数几个有名字的结构性决策**。这些决策才是本课程真正要教的东西：
+
+| 独特决策 | 为什么不显然 | 章节 | 本课程的最简形态 |
+|---|---|---|---|
+| **事件日志才是真相** | `messages` 看起来像记忆，其实只是*投影*；真正存储的是 append-only 日志 | s05 | `Session` + `derive_messages()` |
+| **Turn / Step / Round** | 「一次输入」≠「一次模型调用」；没有这套词汇就无法谈论预算、回放、被拒绝的 turn | s06 | `run_turn()` + 内层 step 循环 |
+| **权限是 listener，不是 `if`** | 工具执行是*瀑布管线*（`pre → execute → post`）；策略挂在管线上，增删都不用动 loop | s04 → s13 | 6 行 `EventBus.waterfall` |
+| **Capability Seam** | Definition / Provider / Consumer —— 换一个 provider，整个产品跟着换，无需 provider 分叉 | s15 | `FileSystem` / `Shell` Protocol + Local / Memory / DryRun |
+| **Everything is a plugin** | 没有需要 patch 的特权核心；一个特性就是一个单元，整体挂载、整体卸载 | s14 | `PluginContext` + 逆序 disposer |
+| **可逆效应** | 注册返回自己的逆，复合清理自动推导 —— 插件能热卸载的根本原因 | s14 + [笔记](docs/cordis-paper-spatiotemporal-composability.md) | `on()/use()/register()` 返回 disposer |
+| **Scope** | subagent 的价值是 context isolation + *受限 action space*，不是「再多调一次 LLM」 | s09 | `registry.restricted()` |
+| **目标是持久状态** | 目标在关掉终端后仍在，由模型判定完成，而不是 `while not done` | s17 | 事件日志上的 `GoalStore` |
+
+deepseek-harness 真正**独一无二**的地方，是这条链的最后一步：
+这些想法不是江湖经验，而是有一篇形式化论文 —— **Cordis**（可逆效应 + 反应式 coeffect）做底。
+本课程用 30 行的 `EventBus` + `PluginContext` 重新表达了论文的核心，
+而[论文解读](docs/cordis-paper-spatiotemporal-composability.md)把每个 Cordis 概念
+一一对应回章节 —— 包括我们**刻意没有移植**的部分（反应式 coeffect、fiber 生命周期、confluence 定理）。
+阅读路径见 [docs/](docs/README.md)。
+
+---
+
 ## 学习路线
 
 ```
@@ -208,15 +235,18 @@ execution / persistence / isolation / communication。
   —— 吸收了它的**工业设计**：Session Event Log、Turn/Step 词汇、
   工具执行管线、Capability Seam、Everything is a plugin。
   但没有复制它的 Cordis 框架 —— 用 30 行 EventBus + PluginContext 表达同样的思想。
+  概念 → 章节的对应关系见
+  ["deepseek-harness 到底「不同」在哪"](#deepseek-harness-到底不同在哪)。
 
 本项目**不是**上述任何一个项目的 fork / 翻译 / 简化版。
 调研结论和设计决策见 [DESIGN.md](DESIGN.md)。
 
 ## 延伸阅读
 
+- [docs/README.md](docs/README.md) —— 补充阅读的目录索引与推荐阅读路径。
 - [Cordis 论文解读：可逆效应与反应式 Coeffect](docs/cordis-paper-spatiotemporal-composability.md)
   —— deepseek-harness 底层框架 Cordis 的形式化论文（88 页）的中文解读，
-  含"与本课程的逐项对照"。读完全 18 章后再看，效果最好。
+  含"与本课程的逐项对照"。读完 s13/s14/s15 后再看，效果最好。
 
 ## 参与贡献
 
