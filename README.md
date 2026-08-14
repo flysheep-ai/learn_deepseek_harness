@@ -1,125 +1,130 @@
 # learn-agent-harness
 
-> 一本**可以运行**的 Agent Harness 教材。
-> 从 60 行代码开始，逐章看到现代 Coding Agent 的 Harness 是怎么被问题逼出来的。
+> A **runnable** course on Agent Harness internals.
+> Starting from a 60-line script, watch chapter by chapter how a modern coding
+> agent's harness is **forced into existence by real problems**.
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue) ![Chapters](https://img.shields.io/badge/chapters-18-orange) ![Tests](https://img.shields.io/badge/tests-21%20passing-green) ![Offline](https://img.shields.io/badge/demo-offline%20%E2%80%94%20no%20API%20key-lightgrey) ![Deps](https://img.shields.io/badge/dependencies-httpx%20only-brightgreen) ![License](https://img.shields.io/badge/license-MIT-yellow)
 
-**中文教程 · Chinese course with English keywords for searchability**
+**English primary · [中文版请见 README.cn.md](README.cn.md)**
+
+A runnable, progressive course on **agent harness internals**: how a modern coding
+agent (Claude Code / DeepSeek Harness style) actually works under the hood — from a
+60-line agent loop to a full pluggable harness with session event log, tool pipeline,
+permission, subagents, plugin system, capability seams, and a goal loop. Every chapter
+is a complete, self-contained, offline-runnable Python file.
 
 `agent-harness` · `llm-agents` · `tool-calling` · `ai-coding-agent` · `plugin-system` · `event-sourcing` · `educational`
 
-A runnable, progressive course on **agent harness internals**: how a modern coding agent
-(Claude Code / DeepSeek Harness style) actually works under the hood — from a 60-line
-agent loop to a full pluggable harness with event log, tool pipeline, permission,
-subagents, plugin system, capability seams, and a goal loop. Every chapter is a
-complete, self-contained, offline-runnable Python file.
-
 ---
 
-## 这是什么
+## What this is
 
-一个 Agent Harness 通常长这样：
+A typical agent harness looks like this:
 
 ```
- 用户 ──▶ Agent Loop ──▶ LLM ──▶ Tool Calls ──▶ 文件系统 / Shell / 沙箱
-             │  ▲
-             ▼  │
-          Session（事件日志）
+ User ──▶ Agent Loop ──▶ LLM ──▶ Tool Calls ──▶ Filesystem / Shell / Sandbox
+            │  ▲
+            ▼  │
+        Session (event log)
 ```
 
-市面上有大量框架（LangChain / LangGraph / Claude Code / DeepSeek Harness），
-但它们的代码量以万行计，读不懂也改不动。
+Plenty of frameworks exist (LangChain, LangGraph, Claude Code, DeepSeek Harness),
+but they are tens of thousands of lines — hard to read, harder to modify.
 
-这个项目教你**这些框架底下到底发生了什么** ——
-不是通过论文，而是通过 18 个**每章一个概念、每章都能独立运行**的 Python 文件。
+This project teaches you **what really happens underneath those frameworks** —
+not through papers, but through 18 Python files, **one concept per chapter,
+each fully runnable on its own**.
 
-### 适合谁读
+### Who this is for
 
-- 会 Python、调过 LLM API、用过 tool calling，但**不懂 Harness 原理**的开发者
-- 想读懂 DeepSeek Harness / Claude Code 架构文档的人（读完全课程，dsh 的
-  architecture.md 每一页都能对上号）
-- 想自己写 Agent 框架，但不想从几万行代码里考古的人
-- 想系统学习 **agent loop / tool registry / session event log / permission /
-  context compaction / subagent / plugin system / capability seam / goal loop**
-  等概念的人
+- Developers who know Python, have called an LLM API, and used tool calling,
+  but don't understand how a harness actually works
+- Anyone who wants to read DeepSeek Harness / Claude Code architecture docs
+  without getting lost (after this course, every page of dsh's
+  `architecture.md` will map to a chapter here)
+- Anyone building their own agent framework who doesn't want to
+  dig through tens of thousands of lines of archaeology
+- Anyone who wants a systematic understanding of: **agent loop / tool registry /
+  session event log / permission / context compaction / subagent / plugin system /
+  capability seam / goal loop**
 
-### 设计原则
+## Design principles
 
-| 原则 | 含义 |
+| Principle | Meaning |
 |---|---|
-| 教学价值 > 功能数量 | 这不是生产框架，是教材 |
-| 清晰度 > 架构炫技 | 每一行抽象都由具体的痛点触发 |
-| 渐进演化 > 一次性设计 | 先让结构坏掉，再修它 —— 你会亲眼看到架构为什么长出来 |
-| **Model decides** > Harness hardcodes | Harness 给模型一个可操作的世界，不替模型写思考流程 |
-| Runnable > PPT 架构 | 每一章都 `python code.py --demo` 离线跑通 |
+| Teaching value > feature count | This is a textbook, not a production framework |
+| Clarity > architectural flair | Every abstraction is triggered by a concrete pain point |
+| Progressive evolution > up-front design | Let the structure break first, then fix it — you'll see why the architecture grows |
+| **Model decides** > harness hardcodes | The harness builds an operable world for the model; it does not script the model's thinking |
+| Runnable > slideware | Every chapter runs offline: `python code.py --demo` |
 
 ---
 
-## 学习路线
+## The learning path
 
 ```
-第一部分：Agent 怎么运行
-─────────────────────────
- s01 agent_loop          对话循环 → 为什么它还不是 Agent
- s02 tool_use            第一个工具，内层 step 循环诞生
+Part 1: How an agent runs
+──────────────────────────
+ s01 agent_loop          A conversation loop — and why it's not an agent yet
+ s02 tool_use            The first tool; the inner step loop is born
  s03 tool_registry       if/elif → Tool / Schema / Registry / Executor
- s04 permission          执行管线 pre → execute → post，权限住在 pre
- s05 session_event_log   messages 不再是真相，事件日志才是
- s06 turn_and_step       一次输入 ≠ 一次模型调用
+ s04 permission          pre → execute → post pipeline; permission lives in pre
+ s05 session_event_log   messages stop being the truth; the event log takes over
+ s06 turn_and_step       One user input ≠ one model call
 
-第二部分：Agent 怎么管理 Context / State / Task
-─────────────────────────
- s07 prompt_assembly     system prompt 是运行时产物，不是常量
- s08 skill_loading       渐进式披露：先给目录，用时才加载
- s09 subagent            context isolation + 受限 action space
- s10 context_compaction  压缩压的是投影，不是日志
- s11 task_system         任务是 Harness 外部状态，不在模型脑子里
- s12 background_jobs     同步 tool call vs 异步 job
+Part 2: How an agent manages Context / State / Task
+──────────────────────────
+ s07 prompt_assembly     The system prompt is a runtime artifact, not a constant
+ s08 skill_loading       Progressive disclosure: catalog always, body on demand
+ s09 subagent            Context isolation + restricted action space
+ s10 context_compaction  Compaction shadows the projection, never the log
+ s11 task_system         Tasks are harness state, not model memory
+ s12 background_jobs     Synchronous tool call vs asynchronous job
 
-第三部分：工业级 Harness 为什么需要 Event / Plugin / Capability / Isolation
-─────────────────────────
- s13 event_bus           权限/日志/度量从 loop 里搬出去，变成 listener
- s14 plugin_system       Context / Registry / Plugin，everything is a plugin
+Part 3: Why industrial harnesses need Event / Plugin / Capability / Isolation
+──────────────────────────
+ s13 event_bus           Permission/logging/metrics move out of the loop into listeners
+ s14 plugin_system       Context / Registry / Plugin — everything is a plugin
  s15 capability_seams    Definition / Provider / Consumer
- s16 agent_team          spawn / send / receive / status，协作策略归模型
- s17 goal_loop           目标是持久状态，不是 while not done
- s18 full_harness        整合，并通过「自主修复失败测试」验收
+ s16 agent_team          spawn / send / receive / status; strategy belongs to the model
+ s17 goal_loop           A goal is persistent state, not a `while not done`
+ s18 full_harness        Integration, verified by autonomously fixing failing tests
 ```
 
-每章都回答一个具体问题：
+Each chapter answers one concrete question:
 
-- **前半部分**：一次用户输入到底发生了什么？Agent 的"记忆"、
-  "行动"、"边界"分别住在哪里？
-- **中间部分**：上下文装不下了怎么办？计划会不会被压缩冲掉？
-  跑 5 分钟的测试为什么要卡死整个 loop？
-- **后半部分**：为什么工业 Harness 要 Event / Plugin / Capability？
-  怎么让"换一个沙箱"不意味着"改六个工具"？
-  怎么让多个 Agent 协作而不替模型写工作流？
+- **Part 1**: What actually happens during one user input? Where do the agent's
+  "memory", "actions", and "boundaries" live?
+- **Part 2**: What happens when context overflows? Does compaction erase your plan?
+  Why should a 5-minute test block the whole loop?
+- **Part 3**: Why do industrial harnesses need Event / Plugin / Capability?
+  How can "switch to a sandbox" not mean "rewrite six tools"?
+  How do multiple agents cooperate without the harness scripting their workflow?
 
 ---
 
-## 快速开始
+## Quick start
 
 ```sh
-# 依赖只有一个：httpx（真实模型时用）
+# Only one dependency: httpx (for real models)
 pip install -r requirements.txt
 
-# 任何一章都可以离线跑（不需要 API key）
+# Any chapter runs offline — no API key needed
 python s01_agent_loop/code.py --demo
 python s10_context_compaction/code.py --demo --debug
 python s18_full_harness/code.py --demo
 
-# 连真实模型（OpenAI 兼容 API 或 Anthropic）
-cp .env.example .env     # 填 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL
+# Connect a real model (OpenAI-compatible API or Anthropic)
+cp .env.example .env     # fill in LLM_API_KEY / LLM_BASE_URL / LLM_MODEL
 python s18_full_harness/code.py
-> 帮我检查这个项目为什么测试失败，并修复它。
+> Help me find out why the tests are failing and fix them.
 
-# 跑测试
+# Run the test suite
 python3 -m unittest discover tests
 ```
 
-### 环境变量
+### Environment variables
 
 ```sh
 LLM_PROVIDER=openai            # openai | anthropic
@@ -128,113 +133,123 @@ LLM_API_KEY=sk-xxxx
 LLM_MODEL=deepseek-chat
 ```
 
-不填也能学 —— 每一章的 `--demo` 用离线假模型（`ScriptedProvider`）完整跑通。
+You don't need any of it to learn — every chapter's `--demo` runs on an offline
+scripted model (`ScriptedProvider`).
 
 ---
 
-## 目录结构
+## Repository layout
 
 ```
 learn-agent-harness/
-├── README.md               ← 你在这里
-├── DESIGN.md               ← 调研结论 + 课程设计决策
-├── harness_llm.py          ← 唯一的共享文件：模型访问层（不含任何 Harness 逻辑）
-├── requirements.txt        ← 只有 httpx
-├── tests/                  ← 每章 smoke + 机制确定性测试
+├── README.md               ← you are here (English)
+├── README.cn.md            ← 中文版
+├── DESIGN.md               ← research findings + course design decisions
+├── harness_llm.py          ← the only shared file: the model access layer
+│                             (contains zero harness logic)
+├── requirements.txt        ← httpx only
+├── tests/                  ← per-chapter smoke tests + deterministic mechanism tests
+├── docs/                   ← paper notes (Cordis paper reading, in Chinese)
 ├── s01_agent_loop/         code.py + README.md
 ├── s02_tool_use/           code.py + README.md
 │   …
 └── s18_full_harness/       code.py + README.md + skills/
 ```
 
-**为什么每章一个 code.py，而不是一个共享的 src/？**
+**Why one `code.py` per chapter instead of a shared `src/`?**
 
-因为导入共享库会隐藏学习过程：
+Because importing a shared library hides the learning process:
 
 ```python
-from src.agent import Agent    # ❌ 你看不到 Agent 是怎么长的
+from src.agent import Agent    # ❌ you never see how Agent grew
 ```
 
-这个项目宁可重复代码，也要让你在每一章看到**完整、最小、可运行的实现**。
-前后两章 `diff` 一下，就是"这一章新增了什么"的准确答案。
+This project prefers duplication: every chapter shows the **complete, minimal,
+runnable implementation**. Diffing two adjacent chapters is the exact answer to
+"what did this chapter add".
 
-唯一的例外是 `harness_llm.py`（HTTP 传输不是 Harness 机制，不是这门课要教的）。
+The single exception is `harness_llm.py` — HTTP transport is not harness mechanics,
+so it's not part of the lesson.
 
-每章的 README 结构统一：
+Every chapter's README follows the same structure:
 
 ```
-上一章留下的问题 → 这一章解决什么 → 新增的核心概念 → 最小架构图
-→ 跑一下 → 为什么这样设计 → 与上一章相比发生了什么
-→ 真实系统里还有什么 → 自己动手改 → 下一章（用问句结尾）
+The problem the last chapter left → what this chapter solves → the core concept
+→ minimal architecture diagram → run it → why it's designed this way
+→ what changed vs the previous chapter → what real systems do on top
+→ try it yourself → the next chapter (ends with a question)
 ```
 
 ---
 
-## 两条贯穿全课程的铁律
+## Two iron laws running through all 18 chapters
 
 ### 1. Model-visible means logged
 
-（s05 正式提出，s05–s18 每章都在还它的债）
+(Formalized in s05; every chapter from s05 to s18 pays its debt.)
 
-> 凡是能进入模型请求的东西，都必须能从事件日志重建。
+> Anything that can reach a model request must be reconstructable from the log.
 
-`messages` 不是真相，它是事件日志的一个**投影**。恢复、回放、分叉、
-压缩、审计 —— 全部建立在这条铁律上。
+`messages` is not the truth — it is a **projection** of the event log. Recovery,
+replay, forking, compaction, and audit all rest on this law.
 
 ### 2. Model decides. Harness enables
 
-（s02 正式提出，s16 最容易被违反，s18 做最终检查）
+(Formalized in s02; most easily violated in s16; finally checked in s18.)
 
-> Agent 的智能主要来自模型。Harness 的价值不是替模型写死思考流程，
-> 而是为模型构建一个拥有工具、环境、上下文、状态、权限和反馈的可操作世界。
+> The agent's intelligence comes from the model. The harness's value is not to
+> script the model's thinking, but to build the model an operable world of tools,
+> environment, context, state, permissions, and feedback.
 
-Harness 提供：tools / context / state / observation / permission /
-execution / persistence / isolation / communication。
-模型决定：下一步做什么、是否修改计划、如何解决问题。
+The harness provides: tools / context / state / observation / permission /
+execution / persistence / isolation / communication.
+The model decides: what to do next, whether to revise the plan, how to solve the problem.
 
-全库测试里有一条会扫描 Harness 本体，确认没有
-`if task_type == "research"` 这类替模型决策的分支。
+The test suite scans the harness core to confirm there is no branch like
+`if task_type == "research"` making decisions on the model's behalf.
 
 ---
 
-## 参考项目与本项目的关系
+## Relationship to the reference projects
 
 - [shareAI-lab/learn-claude-code](https://github.com/shareAI-lab/learn-claude-code)
-  —— 学习了它的**教学方法**：一章一概念、README 从痛点开局、
-  代码内标注"新增/沿用"、允许重复代码。
+  — borrowed its **teaching method**: one concept per chapter, READMEs that start
+  from pain, in-code markers for "new / unchanged", willing duplication.
 - [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
-  —— 吸收了它的**工业设计**：Session Event Log、Turn/Step 词汇、
-  工具执行管线、Capability Seam、Everything is a plugin。
-  但没有复制它的 Cordis 框架 —— 用 30 行 EventBus + PluginContext 表达同样的思想。
+  — absorbed its **industrial design**: Session Event Log, Turn/Step vocabulary,
+  the tool execution pipeline, Capability Seams, everything-is-a-plugin.
+  But not its Cordis framework — the same ideas are expressed here with a 30-line
+  EventBus + PluginContext.
 
-本项目**不是**上述任何一个项目的 fork / 翻译 / 简化版。
-调研结论和设计决策见 [DESIGN.md](DESIGN.md)。
+This project is **not** a fork, translation, or rewrite of either repository.
+Research findings and design decisions: [DESIGN.md](DESIGN.md).
 
-## 延伸阅读
+## Further reading
 
-- [Cordis 论文解读：可逆效应与反应式 Coeffect](docs/cordis-paper-spatiotemporal-composability.md)
-  —— deepseek-harness 底层框架 Cordis 的形式化论文（88 页）的中文解读，
-  含"与本课程的逐项对照"。读完全 18 章后再看，效果最好。
+- [Cordis paper notes (Chinese): Revertible Effects and Reactive Coeffects](docs/cordis-paper-spatiotemporal-composability.md)
+  — a Chinese reading guide to the 88-page formal paper underlying
+  deepseek-harness's Cordis framework, including a side-by-side mapping to
+  chapters s13/s14 of this course. Best read after finishing all 18 chapters.
+
+## After the 18 chapters
+
+You should be able to read industrial harness documentation now. Try:
+
+1. Open [deepseek-harness's architecture.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/architecture.md)
+   — every sentence should map to a mechanism from some chapter.
+2. Explain Claude Code / Cursor behavior in this course's vocabulary:
+   why it "remembers", why it forgets after compaction, why subagent work
+   doesn't pollute the main context.
+3. Modify s18: add a tool, add a plugin, swap a provider —
+   each should touch exactly one place.
+
+**The course's closing words** (also the ending of s18):
+
+> The agent's intelligence comes from the model.
+> The harness's value is not to script the model's thinking,
+> but to build the model an operable world of tools, environment,
+> context, state, permissions, and feedback.
 
 ## License
 
 [MIT](LICENSE) © 2026 flysheep-ai
-
----
-
-## 读完 18 章之后
-
-你应该能读懂工业 Harness 的文档了。试试：
-
-1. 打开 [deepseek-harness 的 architecture.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/architecture.md)，
-   每一句话应该都能对上某一章的机制。
-2. 看 Claude Code / Cursor 的行为，用本课程的词汇解释它：
-   为什么它能"记得"、为什么压缩后会忘事、为什么子任务不污染主上下文。
-3. 改 s18：加一个工具、加一个插件、换一个 provider ——
-   每件事都应该只动一处。
-
-**课程的最后一句**（也是 s18 的结尾）：
-
-> Agent 的智能主要来自模型。
-> Harness 的价值不是替模型写死思考流程，
-> 而是为模型构建一个拥有工具、环境、上下文、状态、权限和反馈的可操作世界。
