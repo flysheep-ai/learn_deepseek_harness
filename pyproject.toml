@@ -48,6 +48,11 @@ target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint]
+# Pin the rule set explicitly: newer Ruff releases keep expanding the default
+# selection (UP/RUF/EXE/PLW/SIM/...), which would churn the chapter files and
+# break the "diff two adjacent chapters" teaching method. Keep the classic
+# pyflakes + pycodestyle set.
+select = ["E4", "E7", "E9", "F"]
 # E731 (lambda-assignment) and F541 (f-string without placeholders) are
 # intentional teaching idioms in the chapter files — see CONTRIBUTING.md.
 ignore = ["E731", "F541"]

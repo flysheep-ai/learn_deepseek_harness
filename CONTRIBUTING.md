@@ -139,8 +139,10 @@ make lint                          # ruff check .
 make lint-fix                      # ruff check . --fix
 ```
 
-Two rules are intentionally ignored (see `[tool.ruff.lint]` in
-[`pyproject.toml`](pyproject.toml)):
+The rule set is pinned to the classic pyflakes + pycodestyle set
+(`select = ["E4", "E7", "E9", "F"]` in [`pyproject.toml`](pyproject.toml)) —
+newer Ruff releases keep expanding the default selection, which would churn the
+chapter files. Two rules are additionally ignored:
 
 - `E731` (lambda-assignment) — chapters use `X = lambda ...` as a teaching idiom
 - `F541` (f-string without placeholders) — some demo prints keep an `f` prefix
