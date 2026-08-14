@@ -1,5 +1,7 @@
 # s08 — Skill Loading
 
+**English version: [README.en.md](README.en.md)**
+
 [s07](../s07_prompt_assembly/) → **s08** → [s09](../s09_subagent/) → … → s18
 
 > 知识应该提前塞进 prompt，还是等模型要的时候再给？

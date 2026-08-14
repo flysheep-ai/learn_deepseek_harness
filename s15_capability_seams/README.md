@@ -1,5 +1,7 @@
 # s15 — Capability Seams
 
+**English version: [README.en.md](README.en.md)**
+
 [s14](../s14_plugin_system/) → **s15** → [s16](../s16_agent_team/) → … → s18
 
 > 为什么 Filesystem / Shell / LLM 应该通过接口解耦？

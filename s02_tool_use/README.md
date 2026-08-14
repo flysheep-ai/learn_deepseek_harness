@@ -1,5 +1,7 @@
 # s02 — Tool Use
 
+**English version: [README.en.md](README.en.md)**
+
 [s01](../s01_agent_loop/) → **s02** → [s03](../s03_tool_registry/) → … → s18
 
 > 模型是怎么拥有"行动能力"的？

@@ -1,5 +1,7 @@
 # s04 — Permission
 
+**English version: [README.en.md](README.en.md)**
+
 [s03](../s03_tool_registry/) → **s04** → [s05](../s05_session_event_log/) → … → s18
 
 > Harness 不只是给 Agent 能力，也负责**限制** Agent 能力。

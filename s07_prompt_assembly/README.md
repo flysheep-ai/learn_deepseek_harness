@@ -1,5 +1,7 @@
 # s07 — Prompt Assembly
 
+**English version: [README.en.md](README.en.md)**
+
 [s06](../s06_turn_and_step/) → **s07** → [s08](../s08_skill_loading/) → … → s18
 
 > system prompt 是一个常量，还是一个**运行时产物**？

@@ -1,5 +1,7 @@
 # s17 — Goal Loop
 
+**English version: [README.en.md](README.en.md)**
+
 [s16](../s16_agent_team/) → **s17** → [s18](../s18_full_harness/)
 
 > "修好这个 bug" 这种目标，应该住在哪里？

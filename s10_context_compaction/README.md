@@ -1,5 +1,7 @@
 # s10 — Context Compaction
 
+**English version: [README.en.md](README.en.md)**
+
 [s09](../s09_subagent/) → **s10** → [s11](../s11_task_system/) → … → s18
 
 > 上下文撑爆了怎么办？

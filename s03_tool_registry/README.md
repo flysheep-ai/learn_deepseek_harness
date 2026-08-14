@@ -1,5 +1,7 @@
 # s03 — Tool Registry
 
+**English version: [README.en.md](README.en.md)**
+
 [s02](../s02_tool_use/) → **s03** → [s04](../s04_permission/) → … → s18
 
 > **Tool 是 Harness 提供给模型的 Action Space。**

@@ -1,5 +1,7 @@
 # s14 — Plugin System
 
+**English version: [README.en.md](README.en.md)**
+
 [s13](../s13_event_bus/) → **s14** → [s15](../s15_capability_seams/) → … → s18
 
 > **"Everything is a plugin" 到底解决了什么？**

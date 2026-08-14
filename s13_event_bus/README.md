@@ -1,5 +1,7 @@
 # s13 — Event Bus
 
+**English version: [README.en.md](README.en.md)**
+
 [s12](../s12_background_jobs/) → **s13** → [s14](../s14_plugin_system/) → … → s18
 
 > 这一章**一个新功能都没加**。

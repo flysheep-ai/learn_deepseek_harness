@@ -1,5 +1,7 @@
 # s01 — Agent Loop
 
+**English version: [README.en.md](README.en.md)**
+
 **s01** → [s02](../s02_tool_use/) → s03 → … → s18
 
 > 这一章的代码**不是** Agent。

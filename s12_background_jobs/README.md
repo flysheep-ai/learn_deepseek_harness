@@ -1,5 +1,7 @@
 # s12 — Background Jobs
 
+**English version: [README.en.md](README.en.md)**
+
 [s11](../s11_task_system/) → **s12** → [s13](../s13_event_bus/) → … → s18
 
 > 工具调用天然是**同步**的：调了就得等到结果。

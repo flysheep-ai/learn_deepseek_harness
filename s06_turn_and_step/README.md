@@ -1,5 +1,7 @@
 # s06 — Turn and Step
 
+**English version: [README.en.md](README.en.md)**
+
 [s05](../s05_session_event_log/) → **s06** → [s07](../s07_prompt_assembly/) → … → s18
 
 > 一次用户输入，等于一次模型调用吗？

@@ -1,5 +1,7 @@
 # s09 — Subagent
 
+**English version: [README.en.md](README.en.md)**
+
 [s08](../s08_skill_loading/) → **s09** → [s10](../s10_context_compaction/) → … → s18
 
 > Subagent 的价值**不是**"多调了一次 LLM"。

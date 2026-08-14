@@ -150,10 +150,10 @@ learn-agent-harness/
 ├── requirements.txt        ← httpx only
 ├── tests/                  ← per-chapter smoke tests + deterministic mechanism tests
 ├── docs/                   ← paper notes (Cordis paper reading, in Chinese)
-├── s01_agent_loop/         code.py + README.md
-├── s02_tool_use/           code.py + README.md
+├── s01_agent_loop/         code.py + README.md（中文）+ README.en.md
+├── s02_tool_use/           code.py + README.md（中文）+ README.en.md
 │   …
-└── s18_full_harness/       code.py + README.md + skills/
+└── s18_full_harness/       code.py + README.md（中文）+ README.en.md + skills/
 ```
 
 **Why one `code.py` per chapter instead of a shared `src/`?**
@@ -171,7 +171,8 @@ runnable implementation**. Diffing two adjacent chapters is the exact answer to
 The single exception is `harness_llm.py` — HTTP transport is not harness mechanics,
 so it's not part of the lesson.
 
-Every chapter's README follows the same structure:
+Every chapter has **bilingual READMEs** (`README.md` in Chinese — the course text,
+`README.en.md` in English), following the same structure:
 
 ```
 The problem the last chapter left → what this chapter solves → the core concept

@@ -1,5 +1,7 @@
 # s05 — Session Event Log
 
+**English version: [README.en.md](README.en.md)**
+
 [s04](../s04_permission/) → **s05** → [s06](../s06_turn_and_step/) → … → s18
 
 > 这一章推翻了前四章的一个隐含假设。

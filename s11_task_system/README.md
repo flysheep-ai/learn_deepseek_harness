@@ -1,5 +1,7 @@
 # s11 — Task System
 
+**English version: [README.en.md](README.en.md)**
+
 [s10](../s10_context_compaction/) → **s11** → [s12](../s12_background_jobs/) → … → s18
 
 > 计划应该放在模型脑子里，还是放在 Harness 手上？

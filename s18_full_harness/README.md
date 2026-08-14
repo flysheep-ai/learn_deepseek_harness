@@ -1,5 +1,7 @@
 # s18 — Full Harness（整合与验收）
 
+**English version: [README.en.md](README.en.md)**
+
 [s17](../s17_goal_loop/) → **s18**（终点）
 
 > 这一章**不新增任何机制**。

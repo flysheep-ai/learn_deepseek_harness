@@ -1,5 +1,7 @@
 # s16 — Agent Team
 
+**English version: [README.en.md](README.en.md)**
+
 [s15](../s15_capability_seams/) → **s16** → [s17](../s17_goal_loop/) → … → s18
 
 > Harness 提供协作机制，**不替模型编写协作策略**。
