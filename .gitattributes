@@ -1,0 +1,25 @@
+# Normalize line endings for text files and mark binaries.
+# https://git-scm.com/docs/gitattributes
+
+* text=auto
+
+# Text files (LF in the repository)
+*.py      text eol=lf
+*.md      text eol=lf
+*.txt     text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.json    text eol=lf
+*.jsonl   text eol=lf
+*.toml    text eol=lf
+*.ini     text eol=lf
+*.sh      text eol=lf
+Makefile  text eol=lf
+
+# Binary files
+*.pdf  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary

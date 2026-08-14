@@ -1,0 +1,20 @@
+# Local pre-commit hooks. Install with:  pre-commit install
+# See https://pre-commit.com for usage.
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        # Markdown hard line breaks use two trailing spaces.
+        exclude: '\.md$'
+      - id: check-added-large-files
+        args: [--maxkb=2048]

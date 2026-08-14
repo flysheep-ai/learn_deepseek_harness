@@ -252,7 +252,6 @@ class SeamTest(unittest.TestCase):
         self.assertIn("dry-run", r.content)
 
     def test_two_worlds_same_tools(self):
-        from pathlib import Path
         h_local, sess_l = self._make()
         mem = s18.MemoryFileSystem()
         mem.write("a.py", "print('hi')")

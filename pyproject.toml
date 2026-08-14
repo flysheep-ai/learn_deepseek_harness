@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "learn-agent-harness"
+version = "0.1.0"
+description = "A runnable, progressive course on agent harness internals"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "flysheep-ai" }]
+keywords = [
+    "agent-harness",
+    "llm-agents",
+    "tool-calling",
+    "ai-coding-agent",
+    "plugin-system",
+    "event-sourcing",
+    "educational",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Education",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["httpx>=0.27"]
+
+[project.urls]
+Homepage = "https://github.com/flysheep-ai/learn_deepseek_harness"
+Repository = "https://github.com/flysheep-ai/learn_deepseek_harness"
+Issues = "https://github.com/flysheep-ai/learn_deepseek_harness/issues"
+
+# This is a course, not an importable package: each chapter is self-contained.
+# Only the shared model-access layer is exposed as a module.
+[tool.setuptools]
+py-modules = ["harness_llm"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# E731 (lambda-assignment) and F541 (f-string without placeholders) are
+# intentional teaching idioms in the chapter files — see CONTRIBUTING.md.
+ignore = ["E731", "F541"]

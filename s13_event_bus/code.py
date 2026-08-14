@@ -1750,6 +1750,17 @@ def find_orphan_tool_results(messages: list[dict[str, Any]]) -> list[int]:
     return orphans
 
 
+def print_messages_compact(messages: list[dict], title: str, mark_orphans: bool = False) -> None:
+    """把 messages 紧凑地打印出来（交互式 /ctx 命令用）。"""
+    orphans = set(find_orphan_tool_results(messages)) if mark_orphans else set()
+    print(f"\n\033[1m{title}\033[0m \033[90m（{len(messages)} 条 / {estimate_tokens(messages)} tokens）\033[0m")
+    for i, m in enumerate(messages):
+        flag = " \033[31m← 孤儿！配对的 tool_call 被切掉了\033[0m" if i in orphans else ""
+        extra = f" +{len(m['tool_calls'])} calls" if m.get("tool_calls") else ""
+        body = str(m.get("content", ""))[:50].replace("\n", "⏎")
+        print(f"  \033[35m{m['role']:<9}\033[0m {body}{extra}{flag}")
+
+
 def find_safe_boundary(session: Session, keep_tokens: int) -> int | None:
     """选一个**安全**的切分点：返回"从会话开头到这个 seq"可以被遮蔽。
 

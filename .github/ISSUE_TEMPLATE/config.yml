@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 README
+    url: https://github.com/flysheep-ai/learn_deepseek_harness#readme
+    about: Please read the README before opening an issue
+  - name: 🎓 DESIGN.md
+    url: https://github.com/flysheep-ai/learn_deepseek_harness/blob/main/DESIGN.md
+    about: The design contract of this course
+  - name: 💬 Discussions
+    url: https://github.com/flysheep-ai/learn_deepseek_harness/discussions
+    about: Ask questions and discuss the course

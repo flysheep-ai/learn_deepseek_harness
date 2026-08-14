@@ -1,7 +1,22 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environments
 .env
 .venv/
+venv/
+
+# Tooling caches
 .pytest_cache/
-.sandbox/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editor / OS
 .DS_Store
+.sandbox/

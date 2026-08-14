@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest an idea for the course.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion!
+
+        Before submitting, please check [DESIGN.md](https://github.com/flysheep-ai/learn_deepseek_harness/blob/main/DESIGN.md)
+        — some things are intentionally out of scope (no streaming, no
+        concurrency, no MCP/ACP/LSP, no Web UI, no real sandbox, no shared
+        `src/` package).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem this solves
+      description: What gap, confusion, or pain point does your idea address?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed idea
+      description: Describe what you would like to see and where (a new chapter, a section, an exercise, a tool…).
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any other approaches you have thought about.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Alignment
+      options:
+        - label: It respects "Model decides. Harness enables." (no task routing in the harness)
+          required: true
+        - label: It can be demonstrated offline via `--demo` / `ScriptedProvider`
+          required: false

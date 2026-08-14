@@ -4,7 +4,7 @@
 > Starting from a 60-line script, watch chapter by chapter how a modern coding
 > agent's harness is **forced into existence by real problems**.
 
-![Python](https://img.shields.io/badge/Python-3.11%2B-blue) ![Chapters](https://img.shields.io/badge/chapters-18-orange) ![Tests](https://img.shields.io/badge/tests-21%20passing-green) ![Offline](https://img.shields.io/badge/demo-offline%20%E2%80%94%20no%20API%20key-lightgrey) ![Deps](https://img.shields.io/badge/dependencies-httpx%20only-brightgreen) ![License](https://img.shields.io/badge/license-MIT-yellow)
+![CI](https://github.com/flysheep-ai/learn_deepseek_harness/actions/workflows/ci.yml/badge.svg) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue) ![Chapters](https://img.shields.io/badge/chapters-18-orange) ![Tests](https://img.shields.io/badge/tests-20%20passing-green) ![Offline](https://img.shields.io/badge/demo-offline%20%E2%80%94%20no%20API%20key-lightgrey) ![Deps](https://img.shields.io/badge/dependencies-httpx%20only-brightgreen) ![License](https://img.shields.io/badge/license-MIT-yellow)
 
 **English primary · [中文版请见 README.cn.md](README.cn.md)**
 
@@ -250,6 +250,24 @@ You should be able to read industrial harness documentation now. Try:
 > The harness's value is not to script the model's thinking,
 > but to build the model an operable world of tools, environment,
 > context, state, permissions, and feedback.
+
+## Contributing
+
+Contributions are welcome — fixes to code or prose, new exercises, better
+explanations, translations, or test coverage.
+
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and house rules.
+- All participants are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+- Please open an issue before starting a large change, so we can align on direction.
+
+## Security
+
+Please report vulnerabilities privately instead of opening a public issue.
+See [SECURITY.md](SECURITY.md).
+
+## Support
+
+For questions, ideas, and discussion, see [SUPPORT.md](SUPPORT.md).
 
 ## License
 

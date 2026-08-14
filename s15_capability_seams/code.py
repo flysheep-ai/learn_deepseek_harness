@@ -43,7 +43,7 @@ from typing import Any, Callable, Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from harness_llm import LLMError, get_provider, scripted  # noqa: E402
+from harness_llm import LLMError, get_provider  # noqa: E402
 
 MAX_STEPS_PER_TURN = 16
 CONTEXT_LIMIT_TOKENS = 4000

@@ -335,7 +335,7 @@ s16（Agent Team）和 s17（Goal Loop）是这条禁令最容易被违反的地
 ## 5. 验收标准
 
 1. 每章 `python sXX_*/code.py --demo` 离线跑通。
-2. `pytest tests/` 全绿（每章一个 smoke test，关键机制有单测）。
+2. `python3 -m unittest discover tests` 全绿（每章一个 smoke test，关键机制有单测）。
 3. s18 在真实模型下能完成：
    > "帮我检查这个项目为什么测试失败，并修复它。"
    Harness 全程不知道这是一个 debugging task；`read / write / edit / grep / glob / bash` 之外没有任何任务专用逻辑。
@@ -392,6 +392,6 @@ s16（Agent Team）和 s17（Goal Loop）是这条禁令最容易被违反的地
 ### 是否真的可以学习 —— 通过
 
 - 18 章 × `--demo` 全部离线跑通（无 API key）
-- 21 个确定性测试全绿（unittest，无 pytest 依赖）
+- 20 个确定性测试全绿（unittest，无 pytest 依赖）
 - s18 完成验收：自主修复失败测试，6 步全部由模型产生
 - 每章 README 含「自己动手改」实验清单

@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a bug in a chapter, the tests, or the docs.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report!
+
+        Please fill in as much detail as you can. The more you give us, the
+        faster we can reproduce and fix it.
+
+  - type: input
+    id: command
+    attributes:
+      label: Command that triggered the bug
+      description: e.g. `python3 s18_full_harness/code.py --demo --debug`
+      placeholder: python3 s18_full_harness/code.py --demo --debug
+    validations:
+      required: true
+
+  - type: input
+    id: python_version
+    attributes:
+      label: Python version
+      description: Output of `python3 --version`
+      placeholder: Python 3.13.9
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Error output
+      description: Paste the relevant error output / traceback (last ~50 lines is usually enough).
+      render: text
+    validations:
+      required: false
+
+  - type: dropdown
+    id: chapter
+    attributes:
+      label: Which chapter is affected?
+      options:
+        - s01_agent_loop
+        - s02_tool_use
+        - s03_tool_registry
+        - s04_permission
+        - s05_session_event_log
+        - s06_turn_and_step
+        - s07_prompt_assembly
+        - s08_skill_loading
+        - s09_subagent
+        - s10_context_compaction
+        - s11_task_system
+        - s12_background_jobs
+        - s13_event_bus
+        - s14_plugin_system
+        - s15_capability_seams
+        - s16_agent_team
+        - s17_goal_loop
+        - s18_full_harness
+        - harness_llm.py / shared
+        - tests / docs / other
+    validations:
+      required: true

@@ -5,7 +5,7 @@
 > 一本**可以运行**的 Agent Harness 教材。
 > 从 60 行代码开始，逐章看到现代 Coding Agent 的 Harness 是怎么被问题逼出来的。
 
-![Python](https://img.shields.io/badge/Python-3.11%2B-blue) ![Chapters](https://img.shields.io/badge/chapters-18-orange) ![Tests](https://img.shields.io/badge/tests-21%20passing-green) ![Offline](https://img.shields.io/badge/demo-offline%20%E2%80%94%20no%20API%20key-lightgrey) ![Deps](https://img.shields.io/badge/dependencies-httpx%20only-brightgreen) ![License](https://img.shields.io/badge/license-MIT-yellow)
+![CI](https://github.com/flysheep-ai/learn_deepseek_harness/actions/workflows/ci.yml/badge.svg) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue) ![Chapters](https://img.shields.io/badge/chapters-18-orange) ![Tests](https://img.shields.io/badge/tests-20%20passing-green) ![Offline](https://img.shields.io/badge/demo-offline%20%E2%80%94%20no%20API%20key-lightgrey) ![Deps](https://img.shields.io/badge/dependencies-httpx%20only-brightgreen) ![License](https://img.shields.io/badge/license-MIT-yellow)
 
 **中文教程 · Chinese course with English keywords for searchability**
 
@@ -217,6 +217,22 @@ execution / persistence / isolation / communication。
 - [Cordis 论文解读：可逆效应与反应式 Coeffect](docs/cordis-paper-spatiotemporal-composability.md)
   —— deepseek-harness 底层框架 Cordis 的形式化论文（88 页）的中文解读，
   含"与本课程的逐项对照"。读完全 18 章后再看，效果最好。
+
+## 参与贡献
+
+欢迎贡献 —— 修代码或文字、补充练习、改进讲解、翻译、或补测试。
+
+- 工作流程和规矩见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- 所有参与者请遵守[行为准则](CODE_OF_CONDUCT.md)。
+- 大改动请先开 issue 对齐方向。
+
+## 安全
+
+发现安全问题请私下报告，不要开公开 issue。见 [SECURITY.md](SECURITY.md)。
+
+## 支持
+
+有问题、想法或想讨论，见 [SUPPORT.md](SUPPORT.md)。
 
 ## License
 
