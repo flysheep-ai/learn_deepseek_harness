@@ -3,6 +3,18 @@
 > 一本**可以运行**的 Agent Harness 教材。
 > 从 60 行代码开始，逐章看到现代 Coding Agent 的 Harness 是怎么被问题逼出来的。
 
+![Python](https://img.shields.io/badge/Python-3.11%2B-blue) ![Chapters](https://img.shields.io/badge/chapters-18-orange) ![Tests](https://img.shields.io/badge/tests-21%20passing-green) ![Offline](https://img.shields.io/badge/demo-offline%20%E2%80%94%20no%20API%20key-lightgrey) ![Deps](https://img.shields.io/badge/dependencies-httpx%20only-brightgreen) ![License](https://img.shields.io/badge/license-MIT-yellow)
+
+**中文教程 · Chinese course with English keywords for searchability**
+
+`agent-harness` · `llm-agents` · `tool-calling` · `ai-coding-agent` · `plugin-system` · `event-sourcing` · `educational`
+
+A runnable, progressive course on **agent harness internals**: how a modern coding agent
+(Claude Code / DeepSeek Harness style) actually works under the hood — from a 60-line
+agent loop to a full pluggable harness with event log, tool pipeline, permission,
+subagents, plugin system, capability seams, and a goal loop. Every chapter is a
+complete, self-contained, offline-runnable Python file.
+
 ---
 
 ## 这是什么
@@ -21,6 +33,16 @@
 
 这个项目教你**这些框架底下到底发生了什么** ——
 不是通过论文，而是通过 18 个**每章一个概念、每章都能独立运行**的 Python 文件。
+
+### 适合谁读
+
+- 会 Python、调过 LLM API、用过 tool calling，但**不懂 Harness 原理**的开发者
+- 想读懂 DeepSeek Harness / Claude Code 架构文档的人（读完全课程，dsh 的
+  architecture.md 每一页都能对上号）
+- 想自己写 Agent 框架，但不想从几万行代码里考古的人
+- 想系统学习 **agent loop / tool registry / session event log / permission /
+  context compaction / subagent / plugin system / capability seam / goal loop**
+  等概念的人
 
 ### 设计原则
 
@@ -187,6 +209,16 @@ execution / persistence / isolation / communication。
 
 本项目**不是**上述任何一个项目的 fork / 翻译 / 简化版。
 调研结论和设计决策见 [DESIGN.md](DESIGN.md)。
+
+## 延伸阅读
+
+- [Cordis 论文解读：可逆效应与反应式 Coeffect](docs/cordis-paper-spatiotemporal-composability.md)
+  —— deepseek-harness 底层框架 Cordis 的形式化论文（88 页）的中文解读，
+  含"与本课程的逐项对照"。读完全 18 章后再看，效果最好。
+
+## License
+
+[MIT](LICENSE) © 2026 flysheep-ai
 
 ---
 
