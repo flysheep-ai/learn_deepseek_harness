@@ -16,6 +16,22 @@
 
 功能数量不是指标。
 
+### 0.1 与一般 harness 教程的差别（v2 定位）
+
+前 18 章（s01–s18）搭建的是**任何** Agent Harness 都需要的骨架。
+但从 s19 起，课程聚焦 deepseek-harness 里**与其他项目不同的内容**——
+那些一般教程根本不讲、却是 dsh 真正的工程精华：
+
+| 章 | dsh 的独门内容 | 出处（dsh） |
+|---|---|---|
+| s19 | 可逆效应：注册返回逆、accumulator 追踪、LIFO 恢复、独立性（乱序撤回） | Cordis 论文 §3.1 |
+| s20 | 反应式 coeffect：依赖满足性**运行时重判**（activating/deactivating/neutral）、单源纪律、级联卸载的三段顺序 | Cordis 论文 §3.2/§4.3 |
+| s21 | 目标视图驱动的生命周期：target vs committed view、惯性状态机、失败先恢复再记录 | Cordis 论文 §4.2/§4.3 |
+| s22 | 会话生命周期：session/end-seed 种子边界、fork、goal activation（armed/disarmed）、派生缓存 | dsh session.md / goal.md |
+
+s19–s22 每一章都**回指**前面某一章："你已经在用这个机制了，
+只是没人告诉你它的名字和它为什么是对的。"
+
 ---
 
 ## 1. 调研：learn-claude-code
@@ -306,6 +322,12 @@ s16（Agent Team）和 s17（Goal Loop）是这条禁令最容易被违反的地
   s16 agent_team         spawn / send / receive / status，协作策略归模型
   s17 goal_loop          目标是持久状态，不是 while not done
   s18 full_harness       整合，并通过"自主修复失败测试"验收
+
+第四部分（进阶）：deepseek-harness 与其他项目不同的内容
+  s19 revertible_effects  注册返回逆 = 可逆效应（track/accumulator/LIFO/独立性）
+  s20 reactive_coeffects  依赖运行时重判 + 级联卸载三段（停供→守卫→撤逆）
+  s21 inertial_lifecycle  target vs committed 驱动 + 惯性 + 失败先恢复再记录
+  s22 session_lifecycle   end-seed 种子边界 / fork / activation / 派生缓存
 ```
 
 每章相对上一章的**新增触发点**（即"上一章为什么不够用"）：

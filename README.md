@@ -120,6 +120,18 @@ Part 3: Why industrial harnesses need Event / Plugin / Capability / Isolation
  s16 agent_team          spawn / send / receive / status; strategy belongs to the model
  s17 goal_loop           A goal is persistent state, not a `while not done`
  s18 full_harness        Integration, verified by autonomously fixing failing tests
+
+Part 4 (advanced): What makes deepseek-harness different from other projects
+──────────────────────────
+ s19 revertible_effects  Registration returns its inverse: track / accumulator /
+                         LIFO recovery / independence (out-of-order withdrawal)
+ s20 reactive_coeffects  Dependency satisfaction re-evaluated on every context
+                         change; the three-stage cascade (stop-provide → guard →
+                         withdraw)
+ s21 inertial_lifecycle  target vs committed view drives everything; inertia;
+                         failure recovers first, records second
+ s22 session_lifecycle   session/end-seed boundary, fork, goal activation
+                         (armed/disarmed), derived caches
 ```
 
 Each chapter answers one concrete question:
@@ -131,6 +143,9 @@ Each chapter answers one concrete question:
 - **Part 3**: Why do industrial harnesses need Event / Plugin / Capability?
   How can "switch to a sandbox" not mean "rewrite six tools"?
   How do multiple agents cooperate without the harness scripting their workflow?
+- **Part 4**: What makes deepseek-harness *different*: revertible effects,
+  reactive coeffects, inertial lifecycles, and session seed boundaries —
+  formalized in the Cordis paper, taught here in runnable form.
 
 ---
 
@@ -183,7 +198,11 @@ learn-agent-harness/
 ├── s01_agent_loop/         code.py + README.md（中文）+ README.en.md
 ├── s02_tool_use/           code.py + README.md（中文）+ README.en.md
 │   …
-└── s18_full_harness/       code.py + README.md（中文）+ README.en.md + skills/
+├── s18_full_harness/       code.py + README.md（中文）+ README.en.md + skills/
+├── s19_revertible_effects/ code.py + README.md（中文）+ README.en.md
+├── s20_reactive_coeffects/ code.py + README.md（中文）+ README.en.md
+├── s21_inertial_lifecycle/ code.py + README.md（中文）+ README.en.md
+└── s22_session_lifecycle/  code.py + README.md（中文）+ README.en.md
 ```
 
 **Why one `code.py` per chapter instead of a shared `src/`?**

@@ -114,6 +114,17 @@ deepseek-harness 真正**独一无二**的地方，是这条链的最后一步�
  s16 agent_team          spawn / send / receive / status，协作策略归模型
  s17 goal_loop           目标是持久状态，不是 while not done
  s18 full_harness        整合，并通过「自主修复失败测试」验收
+
+第四部分（进阶）：deepseek-harness 与其他项目不同的内容
+─────────────────────────
+ s19 revertible_effects  注册返回逆：track / accumulator / LIFO 恢复 /
+                         独立性（乱序撤回）
+ s20 reactive_coeffects  依赖满足性每次上下文变化都重判；
+                         级联卸载三段（停供 → 守卫 → 撤逆）
+ s21 inertial_lifecycle  target vs committed 视图驱动一切；惯性；
+                         失败先恢复再记录
+ s22 session_lifecycle   session/end-seed 种子边界、fork、
+                         goal activation（armed/disarmed）、派生缓存
 ```
 
 每章都回答一个具体问题：
@@ -125,6 +136,9 @@ deepseek-harness 真正**独一无二**的地方，是这条链的最后一步�
 - **后半部分**：为什么工业 Harness 要 Event / Plugin / Capability？
   怎么让"换一个沙箱"不意味着"改六个工具"？
   怎么让多个 Agent 协作而不替模型写工作流？
+- **进阶篇（s19–s22）**：deepseek-harness 与其他项目**不同**的内容——
+  可逆效应、反应式依赖、惯性生命周期、会话种子边界。
+  Cordis 论文把这些形式化了；这里把它们做成可运行的章节。
 
 ---
 

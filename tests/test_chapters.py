@@ -18,6 +18,8 @@ CHAPTERS = [
     "s11_task_system", "s12_background_jobs", "s13_event_bus",
     "s14_plugin_system", "s15_capability_seams", "s16_agent_team",
     "s17_goal_loop", "s18_full_harness",
+    "s19_revertible_effects", "s20_reactive_coeffects",
+    "s21_inertial_lifecycle", "s22_session_lifecycle",
 ]
 
 
